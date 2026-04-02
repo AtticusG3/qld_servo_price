@@ -1,0 +1,510 @@
+from datetime import datetime, timedelta
+import logging
+from typing import Any
+
+from homeassistant.components.recorder import history, get_instance
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
+from homeassistant.util.location import distance
+
+try:
+    from homeassistant.config_entries import ConfigEntry
+except ImportError:  # pragma: no cover - allows lightweight test stubs
+    ConfigEntry = Any
+
+try:
+    from homeassistant.core import HomeAssistant
+except ImportError:  # pragma: no cover - allows lightweight test stubs
+    HomeAssistant = Any
+
+try:
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+except ImportError:  # pragma: no cover - allows lightweight test stubs
+    AddEntitiesCallback = Any
+
+from .const import DOMAIN, FUEL_TYPES, FUEL_TYPES_OPTIONS, LOCATION_ENTITY, RADIUS, ZONE
+
+_LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 1
+
+def get_fuel_data(
+    data_dict: dict[str, dict[str, Any]] | None, f_id: str
+) -> dict[str, Any] | None:
+    """Helper to find fuel data by string fuel ID."""
+    if not data_dict:
+        return None
+    return data_dict.get(str(f_id))
+
+
+def _find_all_tracked_best(
+    hass: HomeAssistant, fuel_id: str
+) -> tuple[float | None, dict[str, Any] | None]:
+    """Return the cheapest local price and its station data across all tracked zones."""
+    best_price = None
+    best_station = None
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        coord = entry.runtime_data
+        if getattr(coord, "data", None):
+            local_best = get_fuel_data(coord.data.get("local_cheapest"), fuel_id)
+            if local_best and local_best.get("price") is not None:
+                price = float(local_best["price"])
+                if best_price is None or price < best_price:
+                    best_price = price
+                    best_station = local_best
+    return best_price, best_station
+
+
+def _resolve_location_source(entry: ConfigEntry) -> str | None:
+    """Return the configured location source entity for derived nearby sensors."""
+    value = entry.options.get(LOCATION_ENTITY, entry.data.get(LOCATION_ENTITY))
+    return value if isinstance(value, str) else None
+
+
+def _remove_stale_entities(
+    hass: HomeAssistant, entry: ConfigEntry, active_unique_ids: set[str]
+) -> None:
+    """Remove stale per-entry station entities from the entity registry."""
+    entity_registry = er.async_get(hass)
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        unique_id = getattr(registry_entry, "unique_id", None)
+        if not unique_id:
+            continue
+        if not unique_id.startswith(f"{DOMAIN}_{entry.entry_id}_"):
+            continue
+        if unique_id not in active_unique_ids:
+            entity_registry.async_remove(registry_entry.entity_id)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Set up the fuel sensors for this specific entry."""
+    coordinator = entry.runtime_data
+    entities = []
+    active_unique_ids = set()
+
+    is_master = (
+        entry.data.get("is_master", False)
+        or hass.data[DOMAIN].get("master_entry_id") == entry.entry_id
+    )
+    chosen_fuels = entry.options.get(FUEL_TYPES, entry.data.get(FUEL_TYPES, []))
+
+    sites_data = coordinator.data.get("sites", {})
+
+    for site_id, site_data in sites_data.items():
+        if not site_data.get("prices"):
+            continue
+        for price_info in site_data["prices"]:
+            f_id = str(price_info.get("FuelId"))
+            if f_id in chosen_fuels:
+                entity = FuelPriceSensor(coordinator, site_id, f_id)
+                entities.append(entity)
+                active_unique_ids.add(entity._attr_unique_id)
+
+    if is_master:
+        for f_id in chosen_fuels:
+            global_entity = QldFuelBestPriceSensor(coordinator, f_id, "global")
+            tracked_entity = QldFuelBestPriceSensor(coordinator, f_id, "all_tracked")
+            entities.append(global_entity)
+            entities.append(tracked_entity)
+            active_unique_ids.add(global_entity._attr_unique_id)
+            active_unique_ids.add(tracked_entity._attr_unique_id)
+
+    for f_id in chosen_fuels:
+        local_entity = QldFuelBestPriceSensor(coordinator, f_id, "local")
+        nearby_entity = QldFuelBestPriceSensor(coordinator, f_id, "nearby")
+        entities.append(local_entity)
+        entities.append(nearby_entity)
+        active_unique_ids.add(local_entity._attr_unique_id)
+        active_unique_ids.add(nearby_entity._attr_unique_id)
+
+    api_diag = QldFuelLastApiResponseSensor(coordinator)
+    entities.append(api_diag)
+    active_unique_ids.add(api_diag._attr_unique_id)
+
+    _remove_stale_entities(hass, entry, active_unique_ids)
+    async_add_entities(entities)
+
+
+class QldFuelBestPriceSensor(CoordinatorEntity, SensorEntity):  # type: ignore[misc]
+    """Sensor for reporting best prices (Global, Local, or All Tracked)."""
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "¢/L"
+    _attr_device_class = None
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: Any, fuel_id: str, scope: str) -> None:
+        super().__init__(coordinator)
+        self.fuel_id = fuel_id
+        self.scope = scope
+
+        fuel_info = next((f for f in FUEL_TYPES_OPTIONS if f["value"] == fuel_id), {"label": fuel_id})
+        fuel_label = str(fuel_info["label"])
+
+        if scope == "global":
+            self._attr_unique_id = f"{DOMAIN}_global_{fuel_id}"
+            self._attr_translation_key = "best_price_global"
+            self._attr_translation_placeholders = {"fuel_type": fuel_label}
+        elif scope == "all_tracked":
+            self._attr_unique_id = f"{DOMAIN}_tracked_{fuel_id}"
+            self._attr_translation_key = "best_price_all_tracked"
+            self._attr_translation_placeholders = {"fuel_type": fuel_label}
+        elif scope == "nearby":
+            self._attr_unique_id = f"{DOMAIN}_nearby_{coordinator.entry.entry_id}_{fuel_id}"
+            self._attr_translation_key = "best_price_nearby"
+            self._attr_translation_placeholders = {"fuel_type": fuel_label}
+        else:
+            zone_id = coordinator.entry.data.get("zone", "zone.home")
+            state = coordinator.hass.states.get(zone_id)
+            zone_name = state.name if state else "Home"
+            self._attr_unique_id = f"{DOMAIN}_local_{coordinator.entry.entry_id}_{fuel_id}"
+            self._attr_translation_key = "best_price_local"
+            self._attr_translation_placeholders = {
+                "fuel_type": fuel_label,
+                "zone": zone_name,
+            }
+        self._attr_entity_category = (
+            EntityCategory.DIAGNOSTIC
+            if scope in ("global", "all_tracked")
+            else None
+        )
+        # Keep nearby sensors as the primary surfaced entity and leave the
+        # legacy local sensor opt-in for new installs.
+        self._attr_entity_registry_enabled_default = scope not in (
+            "global",
+            "all_tracked",
+            "local",
+        )
+
+    def _handle_coordinator_update(self) -> None:
+        """Refresh translation placeholders when referenced zone metadata changes."""
+        if self.scope == "local":
+            zone_entity = self.coordinator.entry.options.get(
+                ZONE, self.coordinator.entry.data.get(ZONE, "zone.home")
+            )
+            state = self.coordinator.hass.states.get(zone_entity)
+            zone_name = state.name if state else "Home"
+            fuel_info = next(
+                (f for f in FUEL_TYPES_OPTIONS if f["value"] == self.fuel_id),
+                {"label": self.fuel_id},
+            )
+            self._attr_translation_placeholders = {
+                "fuel_type": str(fuel_info["label"]),
+                "zone": zone_name,
+            }
+        super()._handle_coordinator_update()
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        if self.scope in ("global", "all_tracked"):
+            return DeviceInfo(
+                identifiers={(DOMAIN, "qld_statewide_global")},
+                name="QLD statewide prices",
+                manufacturer="Queensland fuel price API",
+                model="Statewide monitor",
+                entry_type=DeviceEntryType.SERVICE,
+            )
+
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"zone_{self.coordinator.entry.entry_id}")},
+            name=self.coordinator.entry.title,
+            manufacturer="Queensland fuel price API",
+            model="Local Zone Monitor",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        def _rounded_price(value: Any) -> float | None:
+            if value is None:
+                return None
+            try:
+                return round(float(value), 1)
+            except (TypeError, ValueError):
+                return None
+
+        if self.scope == "global":
+            data = get_fuel_data(self.coordinator.data.get("global_cheapest"), self.fuel_id)
+            return _rounded_price(data.get("price")) if data else None
+
+        if self.scope == "all_tracked":
+            best_price, _ = _find_all_tracked_best(self.hass, self.fuel_id)
+            return round(float(best_price), 1) if best_price is not None else None
+
+        data = get_fuel_data(self.coordinator.data.get("local_cheapest"), self.fuel_id)
+        return _rounded_price(data.get("price")) if data else None
+
+    def _find_station_entity_id(self, station_data: dict[str, Any]) -> str | None:
+        """Best-effort lookup of the station sensor entity id."""
+        site_id = station_data.get("site_id")
+        if site_id is None:
+            return None
+
+        entity_registry = er.async_get(self.hass)
+        target_unique_id = (
+            f"{DOMAIN}_{self.coordinator.entry.entry_id}_{self.fuel_id}_{site_id}"
+        )
+        entity_id = entity_registry.async_get_entity_id(
+            "sensor",
+            DOMAIN,
+            target_unique_id,
+        )
+        return entity_id if isinstance(entity_id, str) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.scope == "global":
+            station_data = get_fuel_data(self.coordinator.data.get("global_cheapest"), self.fuel_id)
+        elif self.scope in ("local", "nearby"):
+            station_data = get_fuel_data(self.coordinator.data.get("local_cheapest"), self.fuel_id)
+        else:
+            _, station_data = _find_all_tracked_best(self.hass, self.fuel_id)
+
+        if not station_data:
+            if self.scope == "nearby":
+                return {
+                    "fuel_id": self.fuel_id,
+                    "search_radius_km": float(
+                        self.coordinator.entry.options.get(
+                            RADIUS, self.coordinator.entry.data.get(RADIUS, 5)
+                        )
+                    ),
+                    "source_tracker": _resolve_location_source(self.coordinator.entry),
+                    "reason": "no_stations_in_range",
+                }
+            return {"status": f"No data for fuel_id {self.fuel_id} in {self.scope}"}
+
+        site_id = station_data.get("site_id")
+        if site_id is None:
+            return {"status": "Price found but site_id is missing"}
+
+        raw_data = self.hass.data.get(DOMAIN, {}).get("raw_data", {})
+        all_sites = raw_data.get("sites", [])
+        site_raw = next((s for s in all_sites if str(s.get("S")) == str(site_id)), None)
+
+        if not site_raw:
+            return {"status": f"Site {site_id} not found in raw data"}
+
+        h_lat, h_lon, _ = self.coordinator._resolve_entry_coords()
+        s_lat = float(site_raw.get("Lat", 0))
+        s_lon = float(site_raw.get("Lng", 0))
+
+        dist_km = "N/A"
+        if h_lat and h_lon and s_lat != 0:
+            dist_km = round(distance(h_lat, h_lon, s_lat, s_lon) / 1000, 1)
+
+        attrs = {
+            "station_name": site_raw.get("N", "Unknown"),
+            "address": f"{site_raw.get('A', '')} {site_raw.get('P', '')}".strip(),
+            "latitude": s_lat,
+            "longitude": s_lon,
+            "Location": f"{s_lat}, {s_lon}",
+            "distance_km": dist_km,
+        }
+        if self.scope == "nearby":
+            source_entity = _resolve_location_source(self.coordinator.entry)
+            attrs.update(
+                {
+                    "search_radius_km": float(
+                        self.coordinator.entry.options.get(
+                            RADIUS, self.coordinator.entry.data.get(RADIUS, 5)
+                        )
+                    ),
+                    "source_tracker": source_entity,
+                    "station_entity_id": self._find_station_entity_id(station_data),
+                    "reason": "ok",
+                }
+            )
+        return attrs
+
+
+class QldFuelLastApiResponseSensor(CoordinatorEntity, SensorEntity):  # type: ignore[misc]
+    """Diagnostic: when the shared Queensland fuel price API last returned fresh data."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_translation_key = "last_api_response"
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: Any) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = (
+            f"{DOMAIN}_{coordinator.entry.entry_id}_last_api_response"
+        )
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"zone_{self.coordinator.entry.entry_id}")},
+            name=self.coordinator.entry.title,
+            manufacturer="Queensland fuel price API",
+            model="Local Zone Monitor",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> datetime | None:
+        domain_data = self.hass.data.get(DOMAIN, {})
+        ts = domain_data.get("last_fetch_time")
+        return ts if isinstance(ts, datetime) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "last_update_success": self.coordinator.last_update_success,
+        }
+
+
+class FuelPriceSensor(CoordinatorEntity, SensorEntity):  # type: ignore[misc]
+    """Representation of a specific station's Fuel Price Sensor."""
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "¢/L"
+    _attr_device_class = None
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: Any, site_id: str, fuel_id: str) -> None:
+        super().__init__(coordinator)
+        self.site_id = site_id
+        self.fuel_id = fuel_id
+        self._attr_translation_key = "station_fuel_price"
+
+        self._14d_low: float | None = None
+        self._14d_low_days: int | None = None
+        self._14d_avg: float | None = None
+        self._7d_low: float | None = None
+        self._7d_low_days: int | None = None
+        self._7d_avg: float | None = None
+
+        fuel_info = next((f for f in FUEL_TYPES_OPTIONS if f["value"] == fuel_id), {"label": fuel_id})
+        site = coordinator.data.get("sites", {}).get(site_id)
+        site_name = site["name"] if site else "Unknown"
+
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.entry.entry_id}_{fuel_id}_{site_id}"
+        self._attr_translation_placeholders = {
+            "station": site_name,
+            "fuel_type": str(fuel_info["label"]),
+        }
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"zone_{self.coordinator.entry.entry_id}")},
+            name=self.coordinator.entry.title,
+            manufacturer="Queensland fuel price API",
+            model="Local Zone Monitor",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        site_data = self.coordinator.data.get("sites", {}).get(self.site_id, {})
+        for p in site_data.get("prices", []):
+            if str(p.get("FuelId")) == self.fuel_id:
+                value = p.get("Price")
+                return float(value) if value is not None else None
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        site = self.coordinator.data.get("sites", {}).get(self.site_id, {})
+        stats = site.get("stats", {}).get(self.fuel_id, {})
+
+        attrs = {
+            "address": f"{site.get('address')} {site.get('postcode')}".strip(),
+            "latitude": site.get("latitude"),
+            "longitude": site.get("longitude"),
+            "distance": f"{site.get('distance')} km",
+            "fuel_id": self.fuel_id,
+            "difference_to_qld_cheapest": stats.get("qld_delta", 0),
+        }
+        if site.get("latitude") is not None and site.get("longitude") is not None:
+            attrs["Location"] = f"{site.get('latitude')}, {site.get('longitude')}"
+
+        if self._7d_low is not None:
+            attrs.update({
+                "7_day_low": f"{self._7d_low} ¢/L",
+                "7_day_average": f"{self._7d_avg} ¢/L",
+                "days_since_7_day_low": f"{self._7d_low_days} days",
+            })
+        if self._14d_low is not None:
+            attrs.update({
+                "14_day_low": f"{self._14d_low} ¢/L",
+                "14_day_average": f"{self._14d_avg} ¢/L",
+                "days_since_14_day_low": f"{self._14d_low_days} days",
+            })
+        return attrs
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        await self._update_history()
+
+    def _handle_coordinator_update(self) -> None:
+        site = self.coordinator.data.get("sites", {}).get(self.site_id)
+        site_name = site["name"] if site else "Unknown"
+        fuel_info = next(
+            (f for f in FUEL_TYPES_OPTIONS if f["value"] == self.fuel_id),
+            {"label": self.fuel_id},
+        )
+        self._attr_translation_placeholders = {
+            "station": site_name,
+            "fuel_type": str(fuel_info["label"]),
+        }
+        self.hass.async_create_task(self._update_history())
+        super()._handle_coordinator_update()
+
+    async def _update_history(self) -> None:
+        """Query the recorder for historical lows and averages."""
+        if self.hass.is_stopping:
+            return
+
+        now = dt_util.utcnow()
+        start_time = now - timedelta(days=14)
+
+        try:
+            state_history = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states, self.hass, start_time, None, [self.entity_id]
+            )
+        except (AttributeError, ValueError) as err:
+            _LOGGER.debug("Could not retrieve history for %s: %s", self.entity_id, err)
+            self.async_write_ha_state()
+            return
+
+        if self.entity_id in state_history:
+            valid_points = []
+            for s in state_history[self.entity_id]:
+                if s.state in ("unknown", "unavailable", "", None):
+                    continue
+                try:
+                    valid_points.append((float(s.state), s.last_changed))
+                except ValueError:
+                    continue
+
+            if valid_points:
+                min_price = min(p[0] for p in valid_points)
+                min_time = max(p[1] for p in valid_points if p[0] == min_price)
+
+                self._14d_low = min_price
+                self._14d_low_days = (now - min_time).days
+                self._14d_avg = round(sum(p[0] for p in valid_points) / len(valid_points), 1)
+
+                seven_days_ago = now - timedelta(days=7)
+                recent_points = [p for p in valid_points if p[1] > seven_days_ago]
+
+                if recent_points:
+                    min_7d = min(p[0] for p in recent_points)
+                    min_7d_time = max(p[1] for p in recent_points if p[0] == min_7d)
+                    self._7d_low = min_7d
+                    self._7d_low_days = (now - min_7d_time).days
+                    self._7d_avg = round(sum(p[0] for p in recent_points) / len(recent_points), 1)
+
+        self.async_write_ha_state()

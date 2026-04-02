@@ -1,0 +1,25 @@
+__pycache__/
+*.py[codz]
+*$py.class
+
+.vscode/
+
+*.BACKUP
+
+# Not used but should block just in case
+.pybuilder/
+target/
+.env
+*.env
+.venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.cursor/
+.DS_Store
+Thumbs.db
+.idea/
+*.log
+*.tmp
+*.bak
+.history/

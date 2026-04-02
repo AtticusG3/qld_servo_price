@@ -1,0 +1,7 @@
+This project is derived from prior work on a Queensland fuel price Home Assistant
+custom integration. Upstream source (for comparison and attribution):
+
+  https://github.com/spusuf/qld-fuel-hass
+
+The upstream project and its contributors are not affiliated with this fork unless
+they choose to participate here. See the repository history and LICENSE for details.

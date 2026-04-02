@@ -1,0 +1,138 @@
+{
+    "services": {
+        "refresh_prices": {
+            "name": "Refresh prices",
+            "description": "Manually triggers an update of fuel prices from the API."
+        }
+    },
+    "exceptions": {
+        "refresh_prices_failed": {
+            "message": "Refresh failed for one or more entries: {entry_ids}."
+        },
+        "coordinator_auth_failed": {
+            "message": "Authentication failed for {entry_title} when updating fuel data."
+        },
+        "coordinator_connectivity_failed": {
+            "message": "Could not reach the Queensland fuel price API for {entry_title}."
+        },
+        "coordinator_update_failed": {
+            "message": "Update failed for {entry_title}: {error_detail}"
+        },
+        "coordinator_missing_token": {
+            "message": "Subscriber token is missing for {entry_title}."
+        }
+    },
+    "config": {
+        "step": {
+            "user": {
+                "title": "QLD Service Station Prices setup",
+                "description": "Configure the stations and fuels to track. All instances are based on a Home Assistant Zone.",
+                "data": {
+                    "location_entity": "Tracked Location Source",
+                    "zone": "Home Assistant Zone",
+                    "subscriber_token": "Data Consumer Token",
+                    "radius": "Fuel Station Radius (km)",
+                    "fuel_types": "Fuel Types to Track",
+                    "scan_interval": "Update Interval (hours)",
+                    "enable_geo_entities": "Map geolocation entities"
+                },
+                "data_description": {
+                    "enable_geo_entities": "Creates one geo_location entity per in-range station and tracked fuel type (in addition to existing price sensors). The entity registry can grow quickly; stations are added or removed when the zone radius or fuel list changes. On the Map card, add geolocation source \"qld_servo_price\" once instead of listing each entity under Entities."
+                }
+            },
+            "reconfigure": {
+                "title": "Reconfigure QLD Service Station Prices",
+                "description": "Update the zone, radius, fuel types, or update interval for this instance.",
+                "data": {
+                    "location_entity": "Tracked Location Source",
+                    "zone": "Home Assistant Zone",
+                    "subscriber_token": "Data Consumer Token",
+                    "radius": "Fuel Station Radius (km)",
+                    "fuel_types": "Fuel Types to Track",
+                    "scan_interval": "Update Interval (hours)",
+                    "enable_geo_entities": "Map geolocation entities"
+                },
+                "data_description": {
+                    "enable_geo_entities": "Creates one geo_location entity per in-range station and tracked fuel type (in addition to existing price sensors). The entity registry can grow quickly; stations are added or removed when the zone radius or fuel list changes. On the Map card, add geolocation source \"qld_servo_price\" once instead of listing each entity under Entities."
+                }
+            },
+            "reauth_confirm": {
+                "title": "Reconnect QLD Service Station Prices",
+                "description": "Your data consumer token needs to be re-authenticated.",
+                "data": {
+                    "subscriber_token": "Data Consumer Token"
+                }
+            }
+        },
+        "abort": {
+            "reauth_successful": "Re-authentication was successful."
+        },
+        "error": {
+            "zone_not_found": "The selected zone could not be found. Please choose a valid Home Assistant Zone.",
+            "location_entity_not_found": "The selected location entity could not be found.",
+            "location_entity_missing_coordinates": "The selected location entity does not provide latitude and longitude attributes.",
+            "invalid_auth": "Invalid data consumer token.",
+            "cannot_connect": "Failed to connect to the Queensland fuel price API."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "QLD Service Station Prices options",
+                "data": {
+                    "location_entity": "Tracked Location Source",
+                    "zone": "Home Assistant Zone",
+                    "radius": "Fuel Station Radius (km)",
+                    "fuel_types": "Fuel Types to Track",
+                    "scan_interval": "Update Interval (hours)",
+                    "enable_geo_entities": "Map geolocation entities"
+                },
+                "data_description": {
+                    "enable_geo_entities": "Creates one geo_location entity per in-range station and tracked fuel type (in addition to existing price sensors). The entity registry can grow quickly; stations are added or removed when the zone radius or fuel list changes. On the Map card, add geolocation source \"qld_servo_price\" once instead of listing each entity under Entities."
+                }
+            }
+        },
+        "error": {
+            "zone_not_found": "The selected zone could not be found. Please choose a valid Home Assistant Zone.",
+            "location_entity_not_found": "The selected location entity could not be found.",
+            "location_entity_missing_coordinates": "The selected location entity does not provide latitude and longitude attributes."
+        }
+    },
+    "issues": {
+        "auth_update_failed": {
+            "title": "Authentication failed for {entry_title}",
+            "description": "The configured data consumer token is no longer accepted by the Queensland fuel price API. Reauthenticate this integration entry."
+        },
+        "connectivity_update_failed": {
+            "title": "Connectivity issue for {entry_title}",
+            "description": "The integration could not reach the Queensland fuel price API. Check connectivity and retry."
+        }
+    },
+    "entity": {
+        "sensor": {
+            "best_price_global": {
+                "name": "Best {fuel_type} in QLD"
+            },
+            "best_price_all_tracked": {
+                "name": "Best {fuel_type} in tracked areas"
+            },
+            "best_price_nearby": {
+                "name": "Best {fuel_type} nearby"
+            },
+            "best_price_local": {
+                "name": "{fuel_type} ({zone})"
+            },
+            "station_fuel_price": {
+                "name": "{station} {fuel_type}"
+            },
+            "last_api_response": {
+                "name": "Last API response"
+            }
+        },
+        "geo_location": {
+            "station_map_pin": {
+                "name": "{fuel_type} {price} - {station}"
+            }
+        }
+    }
+}
