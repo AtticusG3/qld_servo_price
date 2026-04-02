@@ -1,127 +1,193 @@
-# QLD Service Station Prices (Home Assistant custom integration)
+# QLD Service Station Prices
 
-This integration is for users in Queensland, Australia and gives you sensors for fuel stations in one or more areas and statistics for your Home Assistant dashboards. It uses the Queensland Government Mandatory Fuel Price Reporting Scheme API.
+Home Assistant custom integration for **Queensland (Australia) retail fuel prices** using the Fuel Prices QLD **Mandatory Fuel Price Reporting** data feed (server API).
 
-## Setup
+**Domain:** `qld_servo_price`  
+**Integration type:** service (cloud polling)  
+**Declared quality scale:** Gold (see `manifest.json` and the [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/)).
 
-1. Request a Data Consumer Token from this form: [Publisher and Data Consumer Sign Up](https://forms.office.com/Pages/ResponsePage.aspx?id=XbdJc0AKKUSHYhmf2mnq-9XqCWIciN5Osw2Y74gWzu9UQ0pCR1dPV0FWR1ZPN0FYSEc0UEVQMkQzMyQlQCN0PWcu)
-2. Install the integration by copying the [`custom_components/qld_servo_price`](custom_components/qld_servo_price) folder into your Home Assistant `config/custom_components/` directory (create `custom_components` if needed), then restart Home Assistant. You can also install from a private Git repository with HACS **Custom repositories** if you publish this repo there.
-3. Add the integration under **Settings** -> **Devices & services** -> **Add integration** and search for **QLD Service Station Prices**.
+Further reading: [Operations and CI](docs/integration-operations.md) · [API reference (contributors)](docs/fuel-prices-qld-api-reference.md) · [Contributing](CONTRIBUTING.md)
 
-### Migrating from another integration domain
+## Requirements
 
-If you previously used a different integration domain (for example after renaming this fork), remove the old integration entry in Home Assistant, delete the old folder under `config/custom_components/`, install this package, and add the integration again. Entity IDs and automations that referenced the old domain must be updated.
+- **Home Assistant** 2024.1 or newer (minimum declared in [`hacs.json`](hacs.json)).
+- A valid **Fuel Prices QLD Data Consumer Token** ([publisher and consumer sign-up](https://forms.office.com/Pages/ResponsePage.aspx?id=XbdJc0AKKUSHYhmf2mnq-9XqCWIciN5Osw2Y74gWzu9UQ0pCR1dPV0FWR1ZPN0FYSEc0UEVQMkQzMyQlQCN0PWcu)).
+- Outbound HTTPS from Home Assistant to the Fuel Prices QLD API.
 
-### Install/config parameters
+## What you get
 
-| Name | Required | Default | Range | Description |
-|---|---|---|---|---|
-| `subscriber_token` | Yes (master entry only) | None | N/A | Data Consumer Token from Fuel Prices QLD. |
-| `location_entity` | No | None | Entity domain: `person`, `device_tracker`, `sensor` | Optional tracked entity used as the reference coordinates. |
-| `zone` | Yes | `zone.home` | Entity domain: `zone` | Fallback location and display name source when `location_entity` is not provided. |
-| `radius` | Yes | `5` | `1-100` km | Search radius used to include nearby stations. |
-| `fuel_types` | Yes | `["12","5","3"]` | Any subset of supported fuel IDs | Fuel products to create sensors for. |
-| `scan_interval` | Yes | `6` | `1-24` hours | Scheduled refresh interval for API updates. |
-| `enable_geo_entities` | No | `false` | boolean | When enabled, creates one `geo_location` entity per in-range station and tracked fuel (in addition to price sensors). Use Map card **Geolocation sources** with source `qld_servo_price` once instead of listing each entity. |
+- **Per-station sensors** for each selected fuel product within your configured radius.
+- **Summary sensors** for best prices (nearby, optional statewide and multi-area views).
+- **Optional** `geo_location` entities for map pins (off by default).
+- **Config flow** for setup, options, reconfigure, and reauthentication when the token fails.
+- **Diagnostics** download (sensitive fields redacted).
+- **Scheduled polling** plus a manual **refresh** action shared across all entries.
 
-## Features
-- Automatically creates an entry for each station within a selectable radius from your home's location (will add location selector to allow second instance scanning near work, etc)
-- Allows you to select multiple fuel types you want added to home assistant
-- Tracks the price for those fuel types (duh)
-- Tracks the cheapest price in your defined area
-- Tracks the cheapest price in Queensland
-- Tracks statistics in attributes (7 & 14 day lows & averages)
-- Configurable update interval
-- Optional map pins via `geo_location` entities (off by default; see `enable_geo_entities`)
+Scheme overview (consumer-facing): [Fuel Prices Queensland](https://fuelpricesqld.com.au/). Official API PDF: [FuelPricesQLDDirectAPI(OUT)v1.6.pdf](https://www.fuelpricesqld.com.au/documents/FuelPricesQLDDirectAPI(OUT)v1.6.pdf).
 
-### Map card (optional geolocation)
+## Installation
 
-If you enable **Map geolocation entities** in the integration options or initial setup:
+1. Obtain a Data Consumer Token from Fuel Prices QLD (link above).
+2. Install the integration:
+   - **Manual:** Copy [`custom_components/qld_servo_price`](custom_components/qld_servo_price) into `<config>/custom_components/` on your Home Assistant host, then restart Home Assistant.
+   - **HACS:** Add this repository under **HACS > Custom repositories** (if you distribute it that way), then install the integration and restart as prompted.
+3. In Home Assistant go to **Settings** > **Devices & services** > **Add integration** and search for **QLD Service Station Prices**.
 
-- Home Assistant creates roughly one `geo_location.*` entity per station and fuel type you track within the radius (the entity registry can grow quickly when many stations are in range).
-- On a Map card, add **Geolocation sources** and set the source to `qld_servo_price` so all those pins appear without adding each entity under **Entities**.
-- Pin state is distance (km) from your configured reference point; fuel and price appear in the entity name and in attributes (for example `label_mode: attribute` with `price` if you configure the card that way).
+### Migrating from another custom integration or domain
 
-### Price statistics
+If you previously used a different domain or fork name: remove the old integration entry, delete the old files under `custom_components/`, install this package, then add the integration again. Update automations, scripts, and dashboards that referenced the old `entity_id` values.
 
-Station and best-price sensors use `state_class: measurement` with unit `c/L`. Home Assistant records **long-term statistics** as **min, max, and mean** over time, which matches a spot price that goes up and down. They are **not** cumulative meters: `total` / `total_increasing` and sum-style statistics are for consumptions such as energy or water, not for interpreting a sequence of price readings.
+## Configuration parameters
 
-### Reviewer note: device class and units on fuel price sensors
+These options are set during setup and can be changed later via the integration’s **Configure** and **Options** flows.
 
-This integration intentionally leaves **`device_class` unset** (`None`) for station and best-price sensors and uses the native unit **`c/L`** (cents per liter), aligned with how Queensland fuel prices are quoted and with the upstream API.
+| Parameter | Required | Default | Constraints | Description |
+|-----------|----------|---------|-------------|-------------|
+| `subscriber_token` | Yes, on the **first** config entry only | none | GUID from Fuel Prices QLD | Authenticates API access. Further entries reuse the master entry’s token. |
+| `location_entity` | No | none | `person`, `device_tracker`, or `sensor` entities that expose `latitude` and `longitude` | When set, coordinates come from this entity; otherwise the zone below is used. |
+| `zone` | Yes | `zone.home` | Zone entity | Fallback reference location and naming context when `location_entity` is not set. Still required when using a tracker. |
+| `radius` | Yes | `5` | 1–100 km | Maximum distance from the reference point to include stations. |
+| `fuel_types` | Yes | E10, Unleaded 95, Diesel (`12`, `5`, `3`) | Subset of supported IDs (see table below) | Which products get entities. |
+| `scan_interval` | Yes | `6` | 1–24 hours | Coordinator polling interval per entry. |
+| `enable_geo_entities` | No | `false` | boolean | Creates `geo_location` entities for map use; registry can grow quickly. |
 
-**Why not `SensorDeviceClass.MONETARY`?** In Home Assistant, **monetary** sensors represent an **amount in a currency** (for example a balance or a single total in `AUD`). A pump price is a **rate**: money **per liter**. Using `MONETARY` with `AUD` would suggest the state is “this many dollars” in the ordinary sense, while the entity is really “this many cents **per liter**.” That mismatch would be misleading for semantics, statistics consumers, and anyone relying on device-class assumptions.
+### Supported fuel type IDs
 
-**Why not energy “cost” patterns?** The Energy dashboard and typical **cost** entities are built around **measured consumption** (for example electricity in kWh) and **tariffs** (for example `$/kWh`). This integration exposes **retail spot prices** from the mandatory reporting API, not a home’s energy meter or a utility tariff entity, so those cost models do not apply directly.
+| ID | Product |
+|----|---------|
+| `12` | E10 |
+| `2` | Unleaded 91 |
+| `5` | Unleaded 95 |
+| `8` | Unleaded 98 |
+| `3` | Diesel |
+| `14` | Premium diesel |
+| `4` | LPG |
+| `19` | E85 |
 
-The **last API response** diagnostic sensor uses `SensorDeviceClass.TIMESTAMP` where that meaning is exact. For price entities, **`measurement` + `c/L` + no device class** is the deliberate, accurate choice.
+## Devices and entities
 
-## Development quality gates
-- Tests: `python -m pytest -q tests/components/qld_servo_price`
-- Coverage: configured in CI with `--cov-fail-under=95`
-- Strict typing: `python -m mypy --config-file mypy.ini custom_components/qld_servo_price`
+### Devices
 
-![3 fuel sensors on a dashboard](previews/preview2.png "3 fuel sensors with graphs on a dashboard")
+- **Local service device** (per config entry): groups per-station sensors, nearby/local summary sensors, optional map pins, and diagnostics for that entry.
+- **QLD statewide prices** (service device): hosts Queensland-wide and “all tracked areas” summary sensors created by the **master** entry only.
 
-Each sensor has the following attributes:
-- Difference (in cents) to cheapest in QLD
-- Difference (in cents) to cheapest in your defined area
-- 7 day low price
-- Difference between 7 day low and current
-- 7 day average
-- 14 day low price
-- Difference between 14 day low and current
-- 14 day average
-- Distance (in case you want to do a price delta vs distance graph)
+### Sensors
 
-![Preview of a sensor with its attributes](previews/preview1.jpg "Preview of sensor panel")
+**Station price sensors (enabled by default)**  
+One `sensor` per in-range site and selected fuel. State is the reported bowser price. Native unit is **cents per litre** (displayed as c/L).
 
+**Summary sensors (best price)**  
 
+| Purpose | Typical default in UI | Notes |
+|---------|----------------------|--------|
+| Best price near your reference point (“nearby”) | **Enabled** | Uses tracker coordinates when configured, else zone center. |
+| Best price in Queensland | Disabled | Master entry only; enable under **Entities** if needed. |
+| Best price across all configured areas | Disabled | Master entry only. |
+| Best price labeled with zone name (“local”) | Disabled | Legacy-style summary tied to the configured zone name. |
 
-## Note
-The scheme is documented here: [Fuel Prices Queensland](https://fuelpricesqld.com.au/)
-The API is documented here: [API documentation](https://www.fuelpricesqld.com.au/documents/FuelPricesQLDDirectAPI(OUT)v1.6.pdf)
-Sorry about the washed out screenshots, HDR on Hyprland is not yet perfect.
+**Diagnostic sensor**  
+**Last API response** (`sensor` with device class timestamp): disabled by default; shows when shared API data was last refreshed successfully.
 
-### To do
-Add a location selector to the configuration page to allow second instance in a different location
-Get non-washed out screenshots with longer term statistics
+### Optional `geo_location` entities
 
-## Service action: refresh_prices
+If **Map geolocation entities** is enabled:
 
-The integration exposes one Home Assistant service action:
+- Expect roughly one `geo_location` entity per in-range station and tracked fuel type; the entity registry can grow quickly.
+- On a **Map** card, set **Geolocation sources** to **`qld_servo_price`** so pins appear without listing every entity under **Entities**.
+- Map pin state is distance from your reference point; price and label text appear in the name and attributes as configured in the UI.
 
-- `qld_servo_price.refresh_prices`
+## State attributes (reference)
 
-Use this when you want an on-demand update (for example after changing options,
-or when troubleshooting stale values).
+Attributes appear in **Developer tools** > **States** and in the more-info panel. Names below match the published state machine.
 
-Expected behavior:
+### Station fuel price sensors
 
-- Triggers a refresh request for all loaded QLD Service Station Prices config entries.
-- If shared API data is older than 5 minutes, the integration fetches fresh data.
-- If shared API data was fetched in the last 5 minutes, entries reuse the shared
-  cache and recompute from that data.
+| Attribute | Description |
+|-----------|-------------|
+| `address` | Street and postcode (when available). |
+| `latitude` / `longitude` | Station coordinates when available. |
+| `Location` | Combined latitude, longitude string when coordinates exist. |
+| `distance` | Distance from your reference point, e.g. `12.3 km`. |
+| `fuel_id` | Fuel Prices QLD fuel type ID. |
+| `difference_to_qld_cheapest` | Station price minus current Queensland best for that fuel (c/L), when computable. |
+| `7_day_low` / `7_day_average` | Rolling statistics from recorder history (when enough data exists). |
+| `days_since_7_day_low` | Days since the 7-day low was observed. |
+| `14_day_low` / `14_day_average` | Same pattern for 14 days. |
+| `days_since_14_day_low` | Days since the 14-day low was observed. |
 
-Failure behavior:
+Historical attributes depend on the **Recorder** integration and sufficient stored history for that entity.
 
-- If one or more entries fail during the service call, Home Assistant reports the
-  service call as failed (translated error message). Refreshes for other entries
-  still run first; failed entry IDs are listed in the message.
-- Entry-level failures are logged; successful entries can still update before the
-  call raises.
+### Best-price summary sensors
 
-When the API rejects the subscriber token during a scheduled or manual refresh,
-the integration opens a reauthentication flow for that config entry (in addition
-to the Repairs issue) so you can supply a new token.
+When a matching station can be resolved, attributes typically include **`station_name`**, **`address`**, **`latitude`**, **`longitude`**, **`Location`**, and **`distance_km`** from the winning site.
+
+**Nearby** scope may also include **`search_radius_km`**, **`source_tracker`**, **`station_entity_id`**, and **`reason`** (`ok` or `no_stations_in_range`). If no station is in range, attributes explain the empty state instead of fabricating prices.
+
+### `geo_location` map pins (when enabled)
+
+Includes **`fuel_id`**, **`fuel_label`**, **`station_name`**, **`address`**, optional **`price`**, optional **`cheapest_price_in_zone`**, and optional **`price_delta_to_cheapest_in_zone`** (difference between this station’s price and the cheapest in your zone for that fuel).
+
+## Long-term statistics
+
+Price sensors use **`state_class: measurement`** with a **c/L** unit. Home Assistant records **min**, **max**, and **mean** over time, which matches a spot price that moves up and down. They are **not** cumulative meters: `total` / `total_increasing` semantics apply to consumptions such as energy or water, not to a sequence of price readings.
+
+### Device class
+
+Station and best-price sensors intentionally leave **`device_class` unset** and use **c/L** as the rate (cents per litre). **`monetary`** in Home Assistant represents an amount in currency (for example an account balance), not a **per-litre** pump price. **`measurement` + c/L + no device class** keeps semantics aligned with Queensland quoting practice and the API.
+
+The **Last API response** diagnostic uses **`device_class: timestamp`**, which matches its meaning.
+
+## Integration action
+
+| Action | Description |
+|--------|-------------|
+| `qld_servo_price.refresh_prices` | Triggers a refresh for every loaded config entry. |
+
+**Behavior**
+
+- If shared API data is **older than five minutes**, the next refresh performs a network fetch and updates the shared cache.
+- If data is **newer than five minutes**, entries **recompute** from the cached payload (no extra upstream call).
+
+**Failures**
+
+- If any entry fails during the run, Home Assistant surfaces a translated error after other entries have been processed; failed config entry IDs are included in the message. Check logs for per-entry detail.
+- If the API rejects the token, the integration starts **reauthentication** for that entry and may raise a **Repairs** issue.
+
+YAML for **Developer tools** and automation patterns: see [Examples](#examples) and [docs/integration-operations.md](docs/integration-operations.md).
+
+## Data updates
+
+- **`scan_interval`** sets the per-entry polling period (hours).
+- All entries share **one** raw API payload stored under the integration domain.
+- The shared cache **TTL is five minutes**; back-to-back manual refreshes inside that window reuse the same download.
+
+## Diagnostics
+
+From **Settings** > **Devices & services** > **QLD Service Station Prices** > your device, use **Download diagnostics**. Secrets such as the subscriber token are redacted in the file.
 
 ## Examples
 
-Manual refresh from an automation:
+### Automation (Home Assistant 2024.2+)
+
+Use the **`actions`** key for the step list:
 
 ```yaml
 automation:
-  - alias: Refresh fuel prices before a trip
+  - alias: "Refresh fuel prices before a trip"
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    actions:
+      - action: qld_servo_price.refresh_prices
+```
+
+### Automation (Home Assistant 2024.1)
+
+On 2024.1 only, use the legacy **`action`** key instead of **`actions`** at the sequence level:
+
+```yaml
+automation:
+  - alias: "Refresh fuel prices before a trip"
     trigger:
       - platform: time
         at: "07:00:00"
@@ -129,109 +195,47 @@ automation:
       - action: qld_servo_price.refresh_prices
 ```
 
-Map card (optional geolocation entities enabled): add **Geolocation sources** and
-set source to `qld_servo_price` so pins from this integration appear without listing each
-`geo_location.*` entity under **Entities**.
+### Map card
 
-## Removal instructions
-
-1. Go to **Settings -> Devices & Services** in Home Assistant.
-2. Open **QLD Service Station Prices**.
-3. Select the config entry you want to remove.
-4. Use **Delete** (three-dot menu) and confirm.
-5. Optionally remove dashboards and automations that referenced those entities.
+With geolocation entities enabled: add **Geolocation sources** and choose **`qld_servo_price`**.
 
 ## Troubleshooting
 
-- **Invalid token**: confirm your Data Consumer Token is current, copied exactly,
-  and has no leading or trailing spaces.
-- **Cannot connect**: check Home Assistant internet connectivity and retry later.
-  Temporary upstream API issues can also cause this.
-- **Missing zone/location coordinates**: ensure your selected `zone` or
-  `location_entity` exposes valid `latitude` and `longitude` attributes.
-  If no valid coordinates are available, nearby station filtering cannot be
-  calculated correctly.
+| Issue | Checks |
+|-------|--------|
+| Invalid token | Token still valid, no extra spaces, correct copy from Fuel Prices QLD. |
+| Cannot connect | Home Assistant can reach the internet; retry later if the API is degraded. |
+| Wrong or missing nearby results | Zone and optional tracker expose **`latitude`** and **`longitude`**; increase **radius** if needed. |
 
-## Data update behavior
+## Removal
 
-- `scan_interval` controls scheduled refresh frequency in hours (default `6`,
-  supported range `1-24`).
-- All entries share one cached raw API payload at the integration domain level.
-- Shared cache freshness window is 5 minutes. Within that window, refreshes reuse
-  cached API data to avoid extra upstream calls.
-- After the 5-minute window expires, the next refresh fetches fresh data and
-  updates the shared cache for all entries.
-
-## Supported functions
-
-This integration currently supports:
-
-- Setup via Home Assistant config flow.
-- Per-location fuel station sensors for selected fuel types.
-- Best-price summary sensors (local, nearby tracker location, tracked areas, and
-  Queensland-wide).
-- Reconfiguration of location, radius, fuel types, and scan interval.
-- Reauthentication when a token is no longer accepted by the API.
-- Diagnostics snapshots with sensitive values redacted.
-- Manual refresh via the `qld_servo_price.refresh_prices` action.
-
-## Supported devices and entities
-
-This integration creates Home Assistant service-style devices and sensor entities:
-
-- A service device for each configured location entry.
-- A statewide service device for Queensland-level summary sensors.
-- Per-station fuel price sensors for stations in range.
-- Optional `geo_location` map pins (same data as sensors; off by default).
-- Summary sensors for:
-  - best local price for each selected fuel type
-  - best nearby price for each selected fuel type
-  - best tracked-areas price for each selected fuel type (master entry)
-  - best Queensland price for each selected fuel type (master entry)
-
-## Use cases
-
-Common ways to use this integration:
-
-- Compare local stations and pick the best price before refueling.
-- Track fuel trends using 7-day and 14-day price attributes.
-- Monitor a second area (for example near work) with another config entry.
-- Drive automations and dashboard cards from cheapest-price sensors.
-- Trigger an immediate refresh before trips with `qld_servo_price.refresh_prices`.
+1. **Settings** > **Devices & services**
+2. Open **QLD Service Station Prices**
+3. Select the config entry
+4. **Delete** (menu) and confirm
+5. Clean up dashboards, scripts, and automations that referenced those entities
 
 ## Known limitations
 
-- Fuel price data quality and update timing depend on the upstream Queensland Fuel
-  Prices API.
-- If your selected `zone` or `location_entity` has no valid coordinates, nearby
-  station filtering and local comparisons cannot be calculated correctly.
-- Shared API payloads are cached for up to 5 minutes across entries; immediate
-  back-to-back refresh requests may reuse cached data.
-- A specific location source can only be configured once (duplicate location setup
-  is blocked by unique entry handling).
+- Timeliness and coverage depend on **Fuel Prices QLD** and retailer reporting obligations.
+- Without valid coordinates on the selected zone or tracker, distance filtering and comparisons are unreliable.
+- The **five-minute** shared cache limits how often upstream data changes even if you poll or call the refresh action frequently.
+- Each location source may only be configured **once**; duplicates are blocked.
 
-## Discovery applicability
+## Discovery
 
-The Home Assistant Integration Quality Scale rules `discovery` and
-`discovery-update-info` are not applicable for this integration.
+The Integration Quality Scale rules **`discovery`** and **`discovery-update-info`** are **not applicable**. This is a **cloud** integration that requires a **subscriber token** and user-chosen location context. There is no LAN device or broadcast protocol to discover.
 
-Reason:
+## Screenshots
 
-- `qld_servo_price` is a cloud polling service integration that requires a user-provided
-  Fuel Prices QLD Data Consumer Token.
-- Entities are scoped to user-selected location context (`zone` and optional
-  `location_entity`), radius, and chosen fuel products.
-- There is no local network device, protocol broadcast, or hardware endpoint to
-  discover automatically.
-- Setup is intentionally manual through the config flow so users only install and
-  configure the integration when it is relevant to their interests and location.
+![Three fuel sensors on a dashboard](previews/preview2.png "Example: multiple fuel price sensors on a dashboard")
 
-## Attribution
+![Sensor more-info with attributes](previews/preview1.jpg "Example: sensor details and attributes")
 
-This integration builds on ideas and code from the public Queensland fuel price
-Home Assistant integration. See [NOTICE](NOTICE) for the upstream reference and
-fork relationship.
+## Attribution and maintainers
 
-Maintainers: set `documentation` and `issue_tracker` in
-[`custom_components/qld_servo_price/manifest.json`](custom_components/qld_servo_price/manifest.json)
-to your GitHub repository URL (placeholders may remain until you publish).
+This integration builds on **[qld_fuel-hass](https://github.com/spusuf/qld_fuel-hass)** by **Yusuf Nayab**. Development here started from upstream **[v.2.0.0](https://github.com/spusuf/qld_fuel-hass/releases/tag/v.2.0.0)** (zone-based tracking and multiple instances), then continued as a separate project under domain `qld_servo_price`.
+
+Legal and lineage detail: [NOTICE](NOTICE). Upstream is not affiliated with this fork unless its maintainers choose to participate.
+
+Published repositories should set **`documentation`** and **`issue_tracker`** in [`custom_components/qld_servo_price/manifest.json`](custom_components/qld_servo_price/manifest.json) to real URLs (placeholders may remain until you publish).

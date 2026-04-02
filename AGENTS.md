@@ -9,6 +9,7 @@
 
 ## Learned Workspace Facts
 - The workspace is a Home Assistant custom integration repository (domain `qld_servo_price`) for Queensland fuel station prices.
+- Contributor setup, tests, typing, and CI are described in `CONTRIBUTING.md`.
 - The user maintains and contributes changes upstream via fork-based GitHub pull requests.
 - Optional location-source behavior and related discussion trace in part to upstream spusuf/qld_fuel-hass issue #3 (device-tracker-style coordinates in addition to zones); broader geo or map opt-in pull requests have been declined upstream, so similar features may remain fork-only or custom-repo unless upstream changes direction.
 - Stacked pull requests may use a feature branch as the merge base when later work depends on earlier in-flight changes.

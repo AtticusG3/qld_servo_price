@@ -1,4 +1,7 @@
-# Fuel Prices QLD API Reference
+# Fuel Prices QLD API reference
+
+**Audience:** Contributors maintaining the `qld_servo_price` integration or validating API behavior.  
+**User-facing documentation:** [README.md](../README.md) · **Operations and CI:** [integration-operations.md](./integration-operations.md) · **Development:** [CONTRIBUTING.md](../CONTRIBUTING.md)
 
 API version: `v1.6`  
 Publisher and Data Consumer Guide date: March 2023

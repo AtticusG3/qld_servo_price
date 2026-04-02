@@ -1,7 +1,21 @@
-This project is derived from prior work on a Queensland fuel price Home Assistant
-custom integration. Upstream source (for comparison and attribution):
+Upstream project
+----------------
 
-  https://github.com/spusuf/qld-fuel-hass
+This repository is derived from the Home Assistant custom integration maintained
+by **Yusuf Nayab** as **qld_fuel-hass** (Queensland mandatory fuel price
+reporting API integration):
 
-The upstream project and its contributors are not affiliated with this fork unless
-they choose to participate here. See the repository history and LICENSE for details.
+  https://github.com/spusuf/qld_fuel-hass
+
+The starting point for this codebase was upstream **release v.2.0.0** (zone-based
+tracking and multiple instances):
+
+  https://github.com/spusuf/qld_fuel-hass/releases/tag/v.2.0.0
+
+This project continues development under a different integration domain
+(`qld_servo_price`) and repository. Feature set, quality targets, and packaging
+may diverge from upstream.
+
+The upstream project and its contributors are not affiliated with this
+repository unless they choose to participate here. See LICENSE and git history
+for license text and contribution lineage.
