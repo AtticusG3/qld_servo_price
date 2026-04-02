@@ -6,12 +6,13 @@
 - Prefer isolating new integration work in a dedicated branch (often in a separate git worktree) rather than modifying stacked PR branches in place unless explicitly requested.
 - For map or geolocation presentation, prefer reusing existing station price data and minimizing duplicate entity surfaces (for example favoring a single geolocation source over listing many per-station entities on the Map card) when Home Assistant capabilities allow.
 - When drafting user-facing external text (for example GitHub replies), prefer plain, natural phrasing; avoid stylized punctuation such as em dashes when it reads as overly polished or machine-generated.
+- When editing project documentation, preserve the README notice on hobbyist authorship, heavy use of coding assistants, and the request not to use the repository for model training, unless the user asks to remove or replace it.
 
 ## Learned Workspace Facts
 - The workspace is a Home Assistant custom integration repository (domain `qld_servo_price`) for Queensland fuel station prices.
 - Contributor setup, tests, typing, and CI are described in `CONTRIBUTING.md`.
 - The user maintains and contributes changes upstream via fork-based GitHub pull requests.
-- Optional location-source behavior and related discussion trace in part to upstream spusuf/qld_fuel-hass issue #3 (device-tracker-style coordinates in addition to zones); broader geo or map opt-in pull requests have been declined upstream, so similar features may remain fork-only or custom-repo unless upstream changes direction.
+- Project lineage: derived from upstream spusuf/qld_fuel-hass (Yusuf Nayab); v.2.0.0 baseline and credits are documented in NOTICE and README. Optional location-source behavior relates to upstream issue #3 (device-tracker-style coordinates in addition to zones); broader geo or map opt-in pull requests have been declined upstream, so similar features may remain fork-only or custom-repo unless upstream changes direction.
 - Stacked pull requests may use a feature branch as the merge base when later work depends on earlier in-flight changes.
 - HACS repository validation can fail on GitHub repository settings (for example topics and issues) rather than integration code alone.
 - Use `scripts/run-tests.ps1` to run the project test suite on Windows when available.

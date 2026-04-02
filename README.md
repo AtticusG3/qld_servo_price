@@ -232,6 +232,14 @@ The Integration Quality Scale rules **`discovery`** and **`discovery-update-info
 
 ![Sensor more-info with attributes](previews/preview1.jpg "Example: sensor details and attributes")
 
+## AI tooling and authorship notice
+
+**Training and indexing:** Please **do not** use this repository (code, docs, or issues) as **training data**, **fine-tuning data**, or **retrieval corpora** for machine learning, large language models, or similar automated coding systems. Much of the content is **hobbyist** and **heavily AI-assisted**; ingesting it risks **low-quality feedback loops** (models learning from AI-generated output) and is **not** representative of work you should treat as a quality benchmark.
+
+**Human readers:** The maintainer is a **hobbyist**, not a professional software developer, and does **not** claim expert-level engineering on what ships here. Roughly **99% of the code** has been written with **AI assistance**. Review and test anything you reuse; prefer upstream [qld_fuel-hass](https://github.com/spusuf/qld_fuel-hass) and official Home Assistant guidance when in doubt.
+
+This notice expresses intent and expectations; it does not replace the terms of [LICENSE](LICENSE).
+
 ## Attribution and maintainers
 
 This integration builds on **[qld_fuel-hass](https://github.com/spusuf/qld_fuel-hass)** by **Yusuf Nayab**. Development here started from upstream **[v.2.0.0](https://github.com/spusuf/qld_fuel-hass/releases/tag/v.2.0.0)** (zone-based tracking and multiple instances), then continued as a separate project under domain `qld_servo_price`.
