@@ -670,3 +670,55 @@ def test_options_flow_resolve_location_success_and_location_missing():
         None,
     )
     assert errors["location_entity"] == "location_entity_not_found"
+
+
+def test_location_entity_selector_options_returns_empty_without_async_all():
+    module = _load_config_flow_module()
+    hass = SimpleNamespace(states=SimpleNamespace())
+    assert module._location_entity_selector_options(hass) == []
+
+
+def test_location_entity_selector_options_filters_domains_and_sorts_labels():
+    module = _load_config_flow_module()
+    states_list = [
+        SimpleNamespace(entity_id="", name="Empty", attributes={"latitude": 1.0, "longitude": 2.0}),
+        SimpleNamespace(
+            entity_id="person.zed",
+            name="Zed",
+            attributes={"latitude": -27.0, "longitude": 153.0},
+        ),
+        SimpleNamespace(
+            entity_id="light.lamp",
+            name="AAA",
+            attributes={"latitude": 1.0, "longitude": 2.0},
+        ),
+        SimpleNamespace(
+            entity_id="sensor.coords",
+            name="coords",
+            attributes={"latitude": 1.0, "longitude": 2.0},
+        ),
+        SimpleNamespace(
+            entity_id="person.no_lat",
+            name="NoLat",
+            attributes={"latitude": None, "longitude": 153.0},
+        ),
+        SimpleNamespace(
+            entity_id="device_tracker.van",
+            name="Van",
+            attributes={"latitude": -28.0, "longitude": 152.0},
+        ),
+    ]
+    hass = SimpleNamespace(states=SimpleNamespace(async_all=lambda: states_list))
+    opts = module._location_entity_selector_options(hass)
+    values = {o["value"] for o in opts}
+    assert values == {"person.zed", "sensor.coords", "device_tracker.van"}
+    labels = [o["label"] for o in opts]
+    assert labels == sorted(labels, key=lambda s: s.lower())
+
+
+def test_location_entity_selector_appends_current_entity_when_not_in_options():
+    module = _load_config_flow_module()
+    hass = SimpleNamespace(states=SimpleNamespace(async_all=lambda: []))
+    sel = module._location_entity_selector(hass, current_location_entity="person.legacy")
+    options = sel.cfg.kwargs["options"]
+    assert {"value": "person.legacy", "label": "person.legacy"} in options

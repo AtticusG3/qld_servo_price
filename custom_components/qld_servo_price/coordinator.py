@@ -76,6 +76,28 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
             name=f"{DOMAIN}_{entry.title}",
             update_interval=timedelta(hours=float(scan_interval)),
         )
+        self._refresh_failure_logged = False
+
+    def _log_refresh_failed_once(self, reason: str) -> None:
+        """Emit a single warning per outage when API refresh fails (avoid log spam)."""
+        if self._refresh_failure_logged:
+            return
+        _LOGGER.warning(
+            "QLD fuel price refresh failed for '%s': %s",
+            self.entry.title,
+            reason,
+        )
+        self._refresh_failure_logged = True
+
+    def _log_refresh_recovered_if_needed(self) -> None:
+        """After a successful network refresh, log recovery once if we had logged failure."""
+        if not self._refresh_failure_logged:
+            return
+        _LOGGER.info(
+            "QLD fuel price refresh recovered for '%s'; API data updated successfully",
+            self.entry.title,
+        )
+        self._refresh_failure_logged = False
 
     def _issue_id(self, kind: str) -> str:
         """Build deterministic issue IDs for this config entry."""
@@ -160,7 +182,12 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
             old_lat, old_lon = self._coords_from_state(old_state)
             if (new_lat, new_lon) == (old_lat, old_lon):
                 return
-            self.hass.async_create_task(self.async_recompute_from_cache())
+
+            def _schedule_recompute() -> None:
+                self.hass.async_create_task(self.async_recompute_from_cache())
+
+            # State-change listeners may run off the event loop thread; schedule safely.
+            self.hass.loop.call_soon_threadsafe(_schedule_recompute)
 
         self._remove_location_listener = async_track_state_change_event(
             self.hass,
@@ -200,7 +227,9 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
                     domain_data["last_fetch_time"] = now
                     self._clear_repair_issue("auth")
                     self._clear_repair_issue("connectivity")
+                    self._log_refresh_recovered_if_needed()
                 except QldFuelAuthError as err:
+                    self._log_refresh_failed_once(f"authentication failed ({err})")
                     self._create_repair_issue("auth")
                     reauth = getattr(self.entry, "async_start_reauth", None)
                     if callable(reauth):
@@ -212,6 +241,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
                         translation_placeholders={"entry_title": self.entry.title},
                     ) from err
                 except QldFuelConnectionError as err:
+                    self._log_refresh_failed_once(f"could not reach API ({err})")
                     self._create_repair_issue("connectivity")
                     raise UpdateFailed(
                         f"Error communicating with API: {err}",
@@ -222,6 +252,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
                 except asyncio.CancelledError:
                     raise
                 except (ClientError, TimeoutError, TypeError, ValueError, KeyError) as err:
+                    self._log_refresh_failed_once(str(err))
                     raise UpdateFailed(
                         f"Error communicating with API: {err}",
                         translation_domain=DOMAIN,
@@ -232,6 +263,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
                         },
                     ) from err
                 except Exception as err:
+                    self._log_refresh_failed_once(str(err))
                     raise UpdateFailed(
                         f"Error communicating with API: {err}",
                         translation_domain=DOMAIN,

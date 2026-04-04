@@ -266,3 +266,239 @@ def test_async_setup_entry_enabled_adds_entities():
     asyncio.run(run())
     assert len(added) == 1
     assert added[0].unique_id == "qld_servo_price_geo_e2_12_1"
+
+
+def test_remove_stale_geo_entities_branches():
+    mod = _load_geo_location_module()
+    removed: list[str] = []
+
+    stale = SimpleNamespace(
+        entity_id="geo.stale",
+        unique_id="qld_servo_price_geo_entry1_12_99",
+    )
+    other_entry_prefix = SimpleNamespace(
+        entity_id="geo.other",
+        unique_id="qld_servo_price_geo_other_12_1",
+    )
+    no_uid = SimpleNamespace(entity_id="geo.non", unique_id=None)
+    wrong_prefix = SimpleNamespace(
+        entity_id="geo.wp",
+        unique_id="sensor_entry1_x",
+    )
+
+    er_mod = sys.modules["homeassistant.helpers.entity_registry"]
+
+    def async_get(_hass):
+        return SimpleNamespace(
+            async_remove=lambda eid: removed.append(eid),
+        )
+
+    er_mod.async_get = async_get
+    er_mod.async_entries_for_config_entry = lambda _reg, eid: (
+        [stale, other_entry_prefix, no_uid, wrong_prefix] if eid == "entry1" else []
+    )
+
+    mod._remove_stale_geo_entities(
+        SimpleNamespace(),
+        SimpleNamespace(entry_id="entry1"),
+        {"qld_servo_price_geo_entry1_12_1"},
+    )
+    assert removed == ["geo.stale"]
+
+
+def test_async_setup_entry_skips_empty_prices_and_unlisted_fuels():
+    mod = _load_geo_location_module()
+    er_mod = sys.modules["homeassistant.helpers.entity_registry"]
+    er_mod.async_get = lambda _h: SimpleNamespace(
+        async_entries_for_config_entry=lambda *_a, **_k: [],
+        async_remove=lambda *_a, **_k: None,
+    )
+
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=SimpleNamespace(
+            entry_id="e3",
+            options={"fuel_types": ["12"], "enable_geo_entities": True},
+            data={},
+        ),
+        data={
+            "sites": {
+                "1": {"name": "NoPrices", "prices": []},
+                "2": {
+                    "name": "WrongFuel",
+                    "latitude": -27.0,
+                    "longitude": 153.0,
+                    "distance": 1.0,
+                    "prices": [{"FuelId": "5", "Price": 100.0}],
+                },
+            },
+        },
+    )
+    entry = SimpleNamespace(
+        entry_id="e3",
+        options={"fuel_types": ["12"], "enable_geo_entities": True},
+        data={},
+        runtime_data=coord,
+    )
+    added: list = []
+
+    async def run():
+        await mod.async_setup_entry(
+            SimpleNamespace(),
+            entry,
+            lambda ents, _update=False: added.extend(ents),
+        )
+
+    asyncio.run(run())
+    assert added == []
+
+
+def test_station_geo_event_invalid_price_placeholder_and_coordinates():
+    mod = _load_geo_location_module()
+    entry = SimpleNamespace(entry_id="e4", options={}, data={})
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "S",
+                    "latitude": "not-a-float",
+                    "longitude": None,
+                    "distance": "x",
+                    "prices": [{"FuelId": "12", "Price": "bad"}],
+                },
+            },
+            "local_cheapest": {},
+        },
+    )
+    entity = mod.QldFuelStationGeoEvent(coord, "1", "12")
+    assert entity._attr_translation_placeholders["price"] == "?"
+    assert entity.latitude is None
+    assert entity.longitude is None
+    assert entity.distance is None
+
+
+def test_station_geo_event_unknown_fuel_uses_default_icon():
+    mod = _load_geo_location_module()
+    entry = SimpleNamespace(entry_id="e5", options={}, data={})
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "S",
+                    "latitude": -27.0,
+                    "longitude": 153.0,
+                    "distance": 2.0,
+                    "prices": [{"FuelId": "99", "Price": 150.0}],
+                },
+            },
+            "local_cheapest": {},
+        },
+    )
+    entity = mod.QldFuelStationGeoEvent(coord, "1", "99")
+    assert entity._attr_icon == "mdi:gas-station"
+
+
+def test_station_geo_event_extra_attributes_delta_skips_on_bad_numbers():
+    mod = _load_geo_location_module()
+    entry = SimpleNamespace(entry_id="e6", options={}, data={})
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "S",
+                    "address": "1 St",
+                    "postcode": "4000",
+                    "latitude": -27.0,
+                    "longitude": 153.0,
+                    "distance": 1.0,
+                    "prices": [{"FuelId": "12", "Price": 200.0}],
+                },
+            },
+            "local_cheapest": {"12": {"price": 200.0}},
+        },
+    )
+    entity = mod.QldFuelStationGeoEvent(coord, "1", "12")
+    attrs = entity.extra_state_attributes
+    assert attrs.get("price_delta_to_cheapest_in_zone") == 0.0
+    assert attrs["cheapest_price_in_zone"] == 200.0
+
+    coord2 = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "S",
+                    "address": "1 St",
+                    "postcode": "4000",
+                    "latitude": -27.0,
+                    "longitude": 153.0,
+                    "distance": 1.0,
+                    "prices": [{"FuelId": "12", "Price": 200.0}],
+                },
+            },
+            "local_cheapest": {"12": {"price": object()}},
+        },
+    )
+    entity2 = mod.QldFuelStationGeoEvent(coord2, "1", "12")
+    attrs2 = entity2.extra_state_attributes
+    assert "price_delta_to_cheapest_in_zone" not in attrs2
+    assert "cheapest_price_in_zone" in attrs2
+
+
+def test_station_geo_event_longitude_distance_invalid_and_unit():
+    mod = _load_geo_location_module()
+    entry = SimpleNamespace(entry_id="e8", options={}, data={})
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "S",
+                    "latitude": -27.0,
+                    "longitude": "nope",
+                    "distance": {},
+                    "prices": [{"FuelId": "12", "Price": 1.0}],
+                },
+            },
+            "local_cheapest": {},
+        },
+    )
+    entity = mod.QldFuelStationGeoEvent(coord, "1", "12")
+    assert entity.longitude is None
+    assert entity.distance is None
+    assert entity.unit_of_measurement == mod.DEFAULT_DISTANCE_UNIT
+
+
+def test_station_geo_event_device_info_and_coordinator_update_hook():
+    mod = _load_geo_location_module()
+    entry = SimpleNamespace(entry_id="e7", title="Fuel near X", options={}, data={})
+    coord = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=entry,
+        data={
+            "sites": {
+                "1": {
+                    "name": "Renamed",
+                    "latitude": -27.0,
+                    "longitude": 153.0,
+                    "distance": 1.0,
+                    "prices": [{"FuelId": "12", "Price": 180.0}],
+                },
+            },
+            "local_cheapest": {"12": {"price": 175.0}},
+        },
+    )
+    entity = mod.QldFuelStationGeoEvent(coord, "1", "12")
+    di = entity.device_info
+    assert di["name"] == "Fuel near X"
+    coord.data["sites"]["1"]["name"] = "NewName"
+    entity._handle_coordinator_update()
+    assert entity._attr_translation_placeholders["station"] == "NewName"

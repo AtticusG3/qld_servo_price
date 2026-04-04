@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import importlib.util
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -128,12 +129,20 @@ class _StateMachine:
         return self._states.get(entity_id)
 
 
+class _FakeEventLoop:
+    """Minimal loop stub: run threadsafe callbacks immediately (tests only)."""
+
+    def call_soon_threadsafe(self, callback, *args):
+        callback(*args)
+
+
 class _FakeHass:
     def __init__(self, states):
         self.states = _StateMachine(states)
         self.config = SimpleNamespace(latitude=-27.5, longitude=153.0)
         self.data = {"qld_servo_price": {}}
         self._created_tasks = []
+        self.loop = _FakeEventLoop()
 
     def async_create_task(self, coro):
         self._created_tasks.append(coro)
@@ -319,6 +328,51 @@ def test_async_update_data_fetch_and_cache_paths():
     now[0] = now[0] + timedelta(minutes=1)
     result2 = asyncio.run(coordinator._async_update_data())
     assert result2["processed"] == [{"S": "1"}]
+
+
+def test_refresh_failure_logs_once_then_recovery(caplog):
+    """One warning per outage; one info when a later network refresh succeeds."""
+    module = _load_coordinator_module()
+    t0 = datetime(2026, 1, 1, 12, 0, 0)
+    now = [t0]
+    module.dt_util.utcnow = lambda: now[0]
+    hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
+    entry = SimpleNamespace(
+        entry_id="entry-1",
+        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        options={},
+        title="Fuel near Home",
+    )
+    coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
+    coordinator._process_raw_data = lambda data: {"processed": bool(data.get("sites"))}
+
+    attempt = [0]
+
+    async def _fetch_toggle():
+        attempt[0] += 1
+        if attempt[0] <= 2:
+            raise module.QldFuelConnectionError("timeout")
+        return {"sites": [{"S": "1"}], "prices": []}
+
+    coordinator._fetch_from_api = _fetch_toggle
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed):
+            asyncio.run(coordinator._async_update_data())
+        now[0] = t0 + timedelta(minutes=6)
+        with pytest.raises(sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed):
+            asyncio.run(coordinator._async_update_data())
+
+    warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert len([m for m in warn_msgs if "refresh failed" in m]) == 1
+
+    now[0] = t0 + timedelta(minutes=12)
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(coordinator._async_update_data())
+    assert result["processed"] is True
+    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len([m for m in info_msgs if "refresh recovered" in m]) == 1
+    assert coordinator._refresh_failure_logged is False
 
 
 def test_async_update_data_error_paths_raise_update_failed():
