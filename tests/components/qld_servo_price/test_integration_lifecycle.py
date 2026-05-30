@@ -221,7 +221,8 @@ def test_refresh_service_raises_after_attempting_all_entries():
 
 
 async def _failing_refresh():
-    raise RuntimeError("boom")
+    ha_exc = sys.modules["homeassistant.exceptions"].HomeAssistantError
+    raise ha_exc("boom")
 
 
 def test_iter_runtime_coordinators_skips_non_coordinators():

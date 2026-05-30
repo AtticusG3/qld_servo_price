@@ -105,6 +105,27 @@ def _load_coordinator_module():
     const_module.ZONE = "zone"
     sys.modules["custom_components.qld_servo_price.const"] = const_module
 
+    util_module = ModuleType("custom_components.qld_servo_price.util")
+
+    def coords_from_state(state):
+        if not state:
+            return None, None
+        lat = state.attributes.get("latitude")
+        lon = state.attributes.get("longitude")
+        if lat is None or lon is None:
+            return None, None
+        try:
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None, None
+
+    def get_entry_value(entry, key, default=None):
+        return entry.options.get(key, entry.data.get(key, default))
+
+    util_module.coords_from_state = coords_from_state
+    util_module.get_entry_value = get_entry_value
+    sys.modules["custom_components.qld_servo_price.util"] = util_module
+
     package = ModuleType("custom_components.qld_servo_price")
     package.__path__ = []  # mark as package
     sys.modules["custom_components.qld_servo_price"] = package
@@ -130,19 +151,33 @@ class _StateMachine:
 
 
 class _FakeEventLoop:
-    """Minimal loop stub: run threadsafe callbacks immediately (tests only)."""
+    """Loop stub with optional immediate execution for queued callbacks."""
+
+    def __init__(self, *, execute_immediately: bool = True):
+        self.execute_immediately = execute_immediately
+        self.calls = []
+        self.pending = []
 
     def call_soon_threadsafe(self, callback, *args):
-        callback(*args)
+        self.calls.append((callback, args))
+        if self.execute_immediately:
+            callback(*args)
+        else:
+            self.pending.append((callback, args))
+
+    def run_pending(self):
+        for callback, args in self.pending:
+            callback(*args)
+        self.pending.clear()
 
 
 class _FakeHass:
-    def __init__(self, states):
+    def __init__(self, states, *, loop=None):
         self.states = _StateMachine(states)
         self.config = SimpleNamespace(latitude=-27.5, longitude=153.0)
         self.data = {"qld_servo_price": {}}
         self._created_tasks = []
-        self.loop = _FakeEventLoop()
+        self.loop = loop or _FakeEventLoop()
 
     def async_create_task(self, coro):
         self._created_tasks.append(coro)
@@ -175,7 +210,7 @@ def test_resolve_entry_coords_prefers_location_entity():
     )
 
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
-    lat, lon, source = coordinator._resolve_entry_coords()
+    lat, lon, source = coordinator.resolve_entry_coords()
 
     assert (lat, lon) == (-27.11, 153.11)
     assert source == "person.test"
@@ -259,7 +294,7 @@ def test_resolve_entry_coords_falls_back_to_zone_then_stored_coords():
         title="Fuel near Home",
     )
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
-    assert coordinator._resolve_entry_coords() == (-27.5, 153.0, "zone.home")
+    assert coordinator.resolve_entry_coords() == (-27.5, 153.0, "zone.home")
 
     hass = _FakeHass({})
     bad_entry = SimpleNamespace(
@@ -268,7 +303,7 @@ def test_resolve_entry_coords_falls_back_to_zone_then_stored_coords():
         title="Fuel near Bad",
     )
     coordinator = module.QldFuelDataUpdateCoordinator(hass, bad_entry)
-    assert coordinator._resolve_entry_coords() == (None, None, None)
+    assert coordinator.resolve_entry_coords() == (None, None, None)
 
 
 def test_setup_location_listener_paths_and_change_detection():
@@ -300,8 +335,91 @@ def test_setup_location_listener_paths_and_change_detection():
     listener(SimpleNamespace(**same_event))
     assert hass._created_tasks == []
 
+    hass.states._states["person.test"] = _state("Person", -27.4, 153.0)
     changed_event = {"data": {"old_state": _state("P", -27.5, 153.0), "new_state": _state("P", -27.4, 153.0)}}
     listener(SimpleNamespace(**changed_event))
+    assert len(hass._created_tasks) == 1
+    hass._created_tasks[0].close()
+
+
+def test_setup_location_listener_zone_only_recomputes_on_zone_move():
+    module = _load_coordinator_module()
+    callbacks = []
+
+    def _track(_hass, entities, listener):
+        callbacks.append((entities, listener))
+        return lambda: None
+
+    module.async_track_state_change_event = _track
+    hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
+    entry = SimpleNamespace(
+        data={"zone": "zone.home", "scan_interval": 6},
+        options={},
+        title="Fuel",
+    )
+    coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
+    asyncio.run(coordinator.async_setup_location_listener())
+    assert callbacks[0][0] == ["zone.home"]
+
+    hass.states._states["zone.home"] = _state("Home", -27.4, 153.1)
+    callbacks[0][1](SimpleNamespace(data={}))
+    assert len(hass._created_tasks) == 1
+    hass._created_tasks[0].close()
+
+
+def test_setup_location_listener_ignores_zone_change_when_location_is_primary():
+    module = _load_coordinator_module()
+    listeners = []
+
+    def _track(_hass, _entities, listener):
+        listeners.append(listener)
+        return lambda: None
+
+    module.async_track_state_change_event = _track
+    hass = _FakeHass(
+        {
+            "person.p": _state("Person", -27.5, 153.0),
+            "zone.home": _state("Home", -27.5, 153.0),
+        }
+    )
+    entry = SimpleNamespace(
+        data={"location_entity": "person.p", "zone": "zone.home", "scan_interval": 6},
+        options={},
+        title="Fuel",
+    )
+    coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
+    asyncio.run(coordinator.async_setup_location_listener())
+
+    hass.states._states["zone.home"] = _state("Home", -27.1, 153.3)
+    listeners[0](SimpleNamespace(data={}))
+    assert hass._created_tasks == []
+
+
+def test_location_listener_uses_call_soon_threadsafe_before_task_creation():
+    module = _load_coordinator_module()
+    listeners = []
+
+    def _track(_hass, _entities, listener):
+        listeners.append(listener)
+        return lambda: None
+
+    module.async_track_state_change_event = _track
+    loop = _FakeEventLoop(execute_immediately=False)
+    hass = _FakeHass({"person.test": _state("Person", -27.5, 153.0)}, loop=loop)
+    entry = SimpleNamespace(
+        data={"location_entity": "person.test", "scan_interval": 6},
+        options={},
+        title="Fuel",
+    )
+    coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
+    asyncio.run(coordinator.async_setup_location_listener())
+
+    hass.states._states["person.test"] = _state("Person", -27.4, 153.0)
+    listeners[0](SimpleNamespace(data={}))
+    assert len(loop.calls) == 1
+    assert hass._created_tasks == []
+
+    loop.run_pending()
     assert len(hass._created_tasks) == 1
     hass._created_tasks[0].close()
 
@@ -372,7 +490,60 @@ def test_refresh_failure_logs_once_then_recovery(caplog):
     assert result["processed"] is True
     info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert len([m for m in info_msgs if "refresh recovered" in m]) == 1
-    assert coordinator._refresh_failure_logged is False
+    assert hass.data["qld_servo_price"]["refresh_log"]["outage_logged"] is False
+
+
+def test_refresh_failure_logging_is_shared_across_coordinators(caplog):
+    module = _load_coordinator_module()
+    t0 = datetime(2026, 1, 2, 12, 0, 0)
+    now = [t0]
+    module.dt_util.utcnow = lambda: now[0]
+    hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
+
+    entry_one = SimpleNamespace(
+        entry_id="entry-1",
+        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        options={},
+        title="Fuel One",
+    )
+    entry_two = SimpleNamespace(
+        entry_id="entry-2",
+        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        options={},
+        title="Fuel Two",
+    )
+    coordinator_one = module.QldFuelDataUpdateCoordinator(hass, entry_one)
+    coordinator_two = module.QldFuelDataUpdateCoordinator(hass, entry_two)
+    coordinator_one._process_raw_data = lambda data: {"processed": bool(data.get("sites"))}
+    coordinator_two._process_raw_data = lambda data: {"processed": bool(data.get("sites"))}
+
+    attempts = [0]
+
+    async def _fetch_toggle():
+        attempts[0] += 1
+        if attempts[0] <= 2:
+            raise module.QldFuelConnectionError("timeout")
+        return {"sites": [{"S": "1"}], "prices": []}
+
+    coordinator_one._fetch_from_api = _fetch_toggle
+    coordinator_two._fetch_from_api = _fetch_toggle
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed):
+            asyncio.run(coordinator_one._async_update_data())
+        now[0] = t0 + timedelta(minutes=6)
+        with pytest.raises(sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed):
+            asyncio.run(coordinator_two._async_update_data())
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert len([msg for msg in warnings if "refresh failed" in msg]) == 1
+
+    now[0] = t0 + timedelta(minutes=12)
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(coordinator_one._async_update_data())
+    assert result["processed"] is True
+    infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len([msg for msg in infos if "refresh recovered" in msg]) == 1
 
 
 def test_async_update_data_error_paths_raise_update_failed():
@@ -439,7 +610,7 @@ def test_process_raw_data_and_filter_to_zone_branches():
     hass = _FakeHass({})
     entry = SimpleNamespace(data={"scan_interval": 6, "radius": 1}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
-    coordinator._resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
+    coordinator.resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
     raw_data = {
         "sites": [
             {"S": "1", "N": "A", "A": "addr", "P": "4000", "Lat": -27.5, "Lng": 153.0},
@@ -456,7 +627,7 @@ def test_process_raw_data_and_filter_to_zone_branches():
     assert processed["global_cheapest"]["12"]["price"] == 199.9
     assert processed["local_cheapest"]["5"]["price"] == 150.0
 
-    coordinator._resolve_entry_coords = lambda: (None, None, None)
+    coordinator.resolve_entry_coords = lambda: (None, None, None)
     filtered = coordinator._filter_to_zone([], {}, {})
     assert filtered["sites"] == {}
     assert filtered["local_cheapest"] == {}
@@ -464,12 +635,12 @@ def test_process_raw_data_and_filter_to_zone_branches():
 
 def test_coords_from_state_missing_and_invalid_values():
     module = _load_coordinator_module()
-    assert module.QldFuelDataUpdateCoordinator._coords_from_state(None) == (None, None)
-    assert module.QldFuelDataUpdateCoordinator._coords_from_state(SimpleNamespace(attributes={})) == (
+    assert module.coords_from_state(None) == (None, None)
+    assert module.coords_from_state(SimpleNamespace(attributes={})) == (
         None,
         None,
     )
-    assert module.QldFuelDataUpdateCoordinator._coords_from_state(
+    assert module.coords_from_state(
         SimpleNamespace(attributes={"latitude": "x", "longitude": 1})
     ) == (None, None)
 
@@ -528,7 +699,7 @@ def test_filter_to_zone_skips_sites_outside_radius():
     hass = _FakeHass({})
     entry = SimpleNamespace(data={"scan_interval": 6, "radius": 0.1}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
-    coordinator._resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
+    coordinator.resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
     result = coordinator._filter_to_zone(
         [{"S": "9", "Lat": -25.0, "Lng": 150.0, "N": "Far", "A": "Far", "P": "0000"}],
         {"9": [{"FuelId": "12", "Price": 150.0}]},

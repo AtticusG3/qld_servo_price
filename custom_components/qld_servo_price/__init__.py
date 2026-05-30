@@ -3,6 +3,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
@@ -47,7 +48,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     await coord.async_request_refresh()
                 except asyncio.CancelledError:
                     raise
-                except (HomeAssistantError, UpdateFailed, Exception):  # pragma: no cover
+                except (HomeAssistantError, UpdateFailed, ClientError, TimeoutError, OSError):
                     entry_id = getattr(coord.entry, "entry_id", "unknown")
                     failed_entry_ids.append(entry_id)
                     _LOGGER.warning(

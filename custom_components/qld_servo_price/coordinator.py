@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import ClientError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -18,6 +18,7 @@ from homeassistant.util.location import distance
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
 
 from .const import DOMAIN, TOKEN, RADIUS, SCAN_INTERVAL, LOCATION_ENTITY, ZONE
+from .util import coords_from_state, get_entry_value
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,10 +66,9 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
     def __init__(self, hass: Any, entry: Any) -> None:
         self.entry = entry
         self._remove_location_listener = None
+        self._last_resolved_coords: tuple[float | None, float | None] | None = None
 
-        scan_interval = entry.options.get(
-            SCAN_INTERVAL, entry.data.get(SCAN_INTERVAL, 6)
-        )
+        scan_interval = get_entry_value(entry, SCAN_INTERVAL, 6)
 
         super().__init__(
             hass,
@@ -76,28 +76,33 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
             name=f"{DOMAIN}_{entry.title}",
             update_interval=timedelta(hours=float(scan_interval)),
         )
-        self._refresh_failure_logged = False
 
-    def _log_refresh_failed_once(self, reason: str) -> None:
-        """Emit a single warning per outage when API refresh fails (avoid log spam)."""
-        if self._refresh_failure_logged:
+    @staticmethod
+    def _domain_refresh_log(domain_data: dict[str, Any]) -> dict[str, Any]:
+        """Get refresh-log state stored at integration domain level."""
+        refresh_log = cast(dict[str, Any], domain_data.setdefault("refresh_log", {}))
+        refresh_log.setdefault("outage_logged", False)
+        return refresh_log
+
+    def _log_domain_refresh_failed_once(
+        self, refresh_log: dict[str, Any], reason: str
+    ) -> None:
+        """Emit one warning per integration-wide outage."""
+        if refresh_log.get("outage_logged", False):
             return
         _LOGGER.warning(
-            "QLD fuel price refresh failed for '%s': %s",
+            "QLD fuel price refresh failed (first outage warning, entry '%s'): %s",
             self.entry.title,
             reason,
         )
-        self._refresh_failure_logged = True
+        refresh_log["outage_logged"] = True
 
-    def _log_refresh_recovered_if_needed(self) -> None:
-        """After a successful network refresh, log recovery once if we had logged failure."""
-        if not self._refresh_failure_logged:
+    def _log_domain_refresh_recovered_if_needed(self, refresh_log: dict[str, Any]) -> None:
+        """Emit one recovery log when API fetch succeeds after an outage."""
+        if not refresh_log.get("outage_logged", False):
             return
-        _LOGGER.info(
-            "QLD fuel price refresh recovered for '%s'; API data updated successfully",
-            self.entry.title,
-        )
-        self._refresh_failure_logged = False
+        _LOGGER.info("QLD fuel price refresh recovered; API data updated successfully")
+        refresh_log["outage_logged"] = False
 
     def _issue_id(self, kind: str) -> str:
         """Build deterministic issue IDs for this config entry."""
@@ -119,46 +124,33 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         """Clear a previously raised Repairs issue."""
         async_delete_issue(self.hass, DOMAIN, self._issue_id(kind))
 
-    @staticmethod
-    def _coords_from_state(state: Any) -> tuple[float | None, float | None]:
-        """Extract and normalize lat/lon from an entity state."""
-        if not state:
-            return None, None
+    def _tracked_location_entities(self) -> list[str]:
+        """Return location-related entities to listen to for coordinate changes."""
+        tracked: list[str] = []
+        for key in (LOCATION_ENTITY, ZONE):
+            value = get_entry_value(self.entry, key)
+            if isinstance(value, str) and value and value not in tracked:
+                tracked.append(value)
+        return tracked
 
-        lat = state.attributes.get("latitude")
-        lon = state.attributes.get("longitude")
-        if lat is None or lon is None:
-            return None, None
-
-        try:
-            return float(lat), float(lon)
-        except (TypeError, ValueError):
-            return None, None
-
-    def _resolve_entry_coords(self) -> tuple[float | None, float | None, str | None]:
+    def resolve_entry_coords(self) -> tuple[float | None, float | None, str | None]:
         """Resolve coordinates from location entity, then zone, then stored values."""
-        location_entity = self.entry.options.get(
-            LOCATION_ENTITY, self.entry.data.get(LOCATION_ENTITY)
-        )
+        location_entity = get_entry_value(self.entry, LOCATION_ENTITY)
         if location_entity:
             location_state = self.hass.states.get(location_entity)
-            lat, lon = self._coords_from_state(location_state)
+            lat, lon = coords_from_state(location_state)
             if lat is not None and lon is not None:
                 return lat, lon, location_entity
 
-        zone_entity = self.entry.options.get(ZONE, self.entry.data.get(ZONE))
+        zone_entity = get_entry_value(self.entry, ZONE)
         if zone_entity:
             zone_state = self.hass.states.get(zone_entity)
-            lat, lon = self._coords_from_state(zone_state)
+            lat, lon = coords_from_state(zone_state)
             if lat is not None and lon is not None:
                 return lat, lon, zone_entity
 
-        lat = self.entry.options.get(
-            CONF_LATITUDE, self.entry.data.get(CONF_LATITUDE, self.hass.config.latitude)
-        )
-        lon = self.entry.options.get(
-            CONF_LONGITUDE, self.entry.data.get(CONF_LONGITUDE, self.hass.config.longitude)
-        )
+        lat = get_entry_value(self.entry, CONF_LATITUDE, self.hass.config.latitude)
+        lon = get_entry_value(self.entry, CONF_LONGITUDE, self.hass.config.longitude)
         try:
             return float(lat), float(lon), None
         except (TypeError, ValueError):
@@ -169,19 +161,17 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         if self._remove_location_listener is not None:
             return
 
-        location_entity = self.entry.options.get(
-            LOCATION_ENTITY, self.entry.data.get(LOCATION_ENTITY)
-        )
-        if not location_entity:
+        tracked_entities = self._tracked_location_entities()
+        if not tracked_entities:
             return
+        self._last_resolved_coords = self.resolve_entry_coords()[:2]
 
         def _location_changed(event: Any) -> None:
-            new_state = event.data.get("new_state")
-            old_state = event.data.get("old_state")
-            new_lat, new_lon = self._coords_from_state(new_state)
-            old_lat, old_lon = self._coords_from_state(old_state)
-            if (new_lat, new_lon) == (old_lat, old_lon):
+            _ = event
+            new_coords = self.resolve_entry_coords()[:2]
+            if new_coords == self._last_resolved_coords:
                 return
+            self._last_resolved_coords = new_coords
 
             def _schedule_recompute() -> None:
                 self.hass.async_create_task(self.async_recompute_from_cache())
@@ -191,7 +181,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
 
         self._remove_location_listener = async_track_state_change_event(
             self.hass,
-            [location_entity],
+            tracked_entities,
             _location_changed,
         )
 
@@ -200,6 +190,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         raw_data = self.hass.data.get(DOMAIN, {}).get("raw_data")
         if not raw_data:
             return
+        self._last_resolved_coords = self.resolve_entry_coords()[:2]
         self.async_set_updated_data(self._process_raw_data(raw_data))
 
     async def async_shutdown(self) -> None:
@@ -207,6 +198,28 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         if self._remove_location_listener is not None:
             self._remove_location_listener()
             self._remove_location_listener = None
+
+    def _raise_update_failed(
+        self,
+        refresh_log: dict[str, Any],
+        err: Exception,
+        *,
+        translation_key: str,
+        reason_for_log: str,
+        include_error_detail: bool = False,
+        message: str | None = None,
+    ) -> None:
+        """Raise a translated UpdateFailed after domain-level refresh logging."""
+        self._log_domain_refresh_failed_once(refresh_log, reason_for_log)
+        placeholders: dict[str, str] = {"entry_title": self.entry.title}
+        if include_error_detail:
+            placeholders["error_detail"] = str(err)
+        raise UpdateFailed(
+            message or f"Error communicating with API: {err}",
+            translation_domain=DOMAIN,
+            translation_key=translation_key,
+            translation_placeholders=placeholders,
+        ) from err
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from API or use shared cache."""
@@ -218,6 +231,7 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         async with domain_data["fetch_lock"]:
             last_fetch = domain_data.get("last_fetch_time")
             now = dt_util.utcnow()
+            refresh_log = self._domain_refresh_log(domain_data)
 
             if last_fetch is None or (now - last_fetch) > timedelta(minutes=5):
                 _LOGGER.debug("Shared cache expired or empty. Fetching fresh data for %s", self.entry.title)
@@ -227,52 +241,46 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
                     domain_data["last_fetch_time"] = now
                     self._clear_repair_issue("auth")
                     self._clear_repair_issue("connectivity")
-                    self._log_refresh_recovered_if_needed()
+                    self._log_domain_refresh_recovered_if_needed(refresh_log)
                 except QldFuelAuthError as err:
-                    self._log_refresh_failed_once(f"authentication failed ({err})")
                     self._create_repair_issue("auth")
                     reauth = getattr(self.entry, "async_start_reauth", None)
                     if callable(reauth):
                         reauth(self.hass)
-                    raise UpdateFailed(
-                        f"Authentication failed: {err}",
-                        translation_domain=DOMAIN,
+                    self._raise_update_failed(
+                        refresh_log,
+                        err,
                         translation_key="coordinator_auth_failed",
-                        translation_placeholders={"entry_title": self.entry.title},
-                    ) from err
+                        reason_for_log=f"authentication failed ({err})",
+                        message=f"Authentication failed: {err}",
+                    )
                 except QldFuelConnectionError as err:
-                    self._log_refresh_failed_once(f"could not reach API ({err})")
                     self._create_repair_issue("connectivity")
-                    raise UpdateFailed(
-                        f"Error communicating with API: {err}",
-                        translation_domain=DOMAIN,
+                    self._raise_update_failed(
+                        refresh_log,
+                        err,
                         translation_key="coordinator_connectivity_failed",
-                        translation_placeholders={"entry_title": self.entry.title},
-                    ) from err
+                        reason_for_log=f"could not reach API ({err})",
+                    )
                 except asyncio.CancelledError:
                     raise
-                except (ClientError, TimeoutError, TypeError, ValueError, KeyError) as err:
-                    self._log_refresh_failed_once(str(err))
-                    raise UpdateFailed(
-                        f"Error communicating with API: {err}",
-                        translation_domain=DOMAIN,
-                        translation_key="coordinator_update_failed",
-                        translation_placeholders={
-                            "entry_title": self.entry.title,
-                            "error_detail": str(err),
-                        },
-                    ) from err
+                except (ClientError, TimeoutError, OSError) as err:
+                    self._create_repair_issue("connectivity")
+                    self._raise_update_failed(
+                        refresh_log,
+                        err,
+                        translation_key="coordinator_connectivity_failed",
+                        reason_for_log=f"could not reach API ({err})",
+                    )
                 except Exception as err:
-                    self._log_refresh_failed_once(str(err))
-                    raise UpdateFailed(
-                        f"Error communicating with API: {err}",
-                        translation_domain=DOMAIN,
+                    # Last-resort for unexpected failures after auth/connectivity paths.
+                    self._raise_update_failed(
+                        refresh_log,
+                        err,
                         translation_key="coordinator_update_failed",
-                        translation_placeholders={
-                            "entry_title": self.entry.title,
-                            "error_detail": str(err),
-                        },
-                    ) from err
+                        reason_for_log=str(err),
+                        include_error_detail=True,
+                    )
             else:
                 _LOGGER.debug("Using shared cache for %s", self.entry.title)
 
@@ -374,14 +382,14 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         filtered_sites = {}
         local_cheapest: dict[str, dict[str, Any]] = {}
 
-        lat, lon, _ = self._resolve_entry_coords()
+        lat, lon, _ = self.resolve_entry_coords()
         if lat is None or lon is None:
             return {
                 "sites": {},
                 "global_cheapest": global_cheapest,
                 "local_cheapest": {},
             }
-        radius = float(self.entry.options.get(RADIUS, self.entry.data.get(RADIUS, 5)))
+        radius = float(get_entry_value(self.entry, RADIUS, 5))
 
         for site in sites:
             s_id = str(site.get("S"))
