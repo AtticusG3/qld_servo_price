@@ -12,7 +12,6 @@ from .const import (
     RADIUS,
     FUEL_TYPES,
     FUEL_TYPES_OPTIONS,
-    SCAN_INTERVAL,
     LOCATION_ENTITY,
     ZONE,
 )
@@ -128,9 +127,6 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         fields[vol.Required(FUEL_TYPES, default=["12", "5", "3"])] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=FUEL_TYPES_OPTIONS, multiple=True)
         )
-        fields[vol.Required(SCAN_INTERVAL, default=6)] = selector.NumberSelector(
-            selector.NumberSelectorConfig(min=1, max=24, step=1, unit_of_measurement="hours")
-        )
         fields[vol.Optional(ENABLE_GEO_ENTITIES, default=False)] = selector.BooleanSelector()
 
         return self.async_show_form(step_id="user", data_schema=vol.Schema(fields), errors=errors)
@@ -219,9 +215,6 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         fields[vol.Required(FUEL_TYPES, default=options.get(FUEL_TYPES, data.get(FUEL_TYPES, ["12", "5", "3"])))] = selector.SelectSelector(
             selector.SelectSelectorConfig(options=FUEL_TYPES_OPTIONS, multiple=True)
         )
-        fields[vol.Required(SCAN_INTERVAL, default=options.get(SCAN_INTERVAL, data.get(SCAN_INTERVAL, 6)))] = selector.NumberSelector(
-            selector.NumberSelectorConfig(min=1, max=24, step=1, unit_of_measurement="hours")
-        )
         fields[
             vol.Optional(
                 ENABLE_GEO_ENTITIES,
@@ -240,7 +233,7 @@ class QldFuelOptionsFlowHandler(config_entries.OptionsFlow):  # type: ignore[mis
         self.config_entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
-        """Manage zone, radius, fuel type and scan interval options."""
+        """Manage zone, radius, and fuel type options."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -272,9 +265,6 @@ class QldFuelOptionsFlowHandler(config_entries.OptionsFlow):  # type: ignore[mis
                 ),
                 vol.Required(FUEL_TYPES, default=options.get(FUEL_TYPES, data.get(FUEL_TYPES, ["12", "5", "3"]))): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=FUEL_TYPES_OPTIONS, multiple=True)
-                ),
-                vol.Required(SCAN_INTERVAL, default=options.get(SCAN_INTERVAL, data.get(SCAN_INTERVAL, 6))): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=24, step=1, unit_of_measurement="hours")
                 ),
                 vol.Optional(
                     ENABLE_GEO_ENTITIES,

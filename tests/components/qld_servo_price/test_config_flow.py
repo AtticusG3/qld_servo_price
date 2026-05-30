@@ -175,7 +175,7 @@ def _load_config_flow_module():
     const_module.RADIUS = "radius"
     const_module.FUEL_TYPES = "fuel_types"
     const_module.FUEL_TYPES_OPTIONS = [{"value": "12", "label": "E10"}]
-    const_module.SCAN_INTERVAL = "scan_interval"
+    const_module.DEFAULT_UPDATE_INTERVAL_HOURS = 6
     const_module.LOCATION_ENTITY = "location_entity"
     const_module.ZONE = "zone"
     const_module.ENABLE_GEO_ENTITIES = "enable_geo_entities"
@@ -266,7 +266,6 @@ def test_user_step_creates_entry_when_token_valid():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -291,7 +290,6 @@ def test_user_step_shows_invalid_auth_error():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -316,7 +314,6 @@ def test_user_step_reports_zone_not_found():
                 "zone": "zone.missing",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -340,7 +337,6 @@ def test_user_step_aborts_when_unique_location_already_configured():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -358,7 +354,6 @@ def test_user_step_aborts_when_unique_location_already_configured():
                     "zone": "zone.home",
                     "radius": 5,
                     "fuel_types": ["12"],
-                    "scan_interval": 6,
                 }
             )
         )
@@ -422,7 +417,6 @@ def test_user_step_uses_master_token_when_master_exists():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -446,7 +440,6 @@ def test_user_step_shows_cannot_connect_error():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -518,7 +511,6 @@ def test_reconfigure_updates_data_and_preserves_non_master_token():
                 "zone": "zone.home",
                 "radius": 3,
                 "fuel_types": ["12"],
-                "scan_interval": 2,
             }
         )
     )
@@ -533,7 +525,7 @@ def test_reconfigure_updates_data_and_preserves_non_master_token():
 def test_options_flow_init_error_and_success_paths():
     module = _load_config_flow_module()
     config_entry = SimpleNamespace(
-        data={"zone": "zone.home", "radius": 5, "fuel_types": ["12"], "scan_interval": 6},
+        data={"zone": "zone.home", "radius": 5, "fuel_types": ["12"]},
         options={},
     )
     flow = module.QldFuelOptionsFlowHandler(config_entry)
@@ -545,7 +537,6 @@ def test_options_flow_init_error_and_success_paths():
                 "zone": "zone.missing",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )
@@ -559,7 +550,6 @@ def test_options_flow_init_error_and_success_paths():
                 "zone": "zone.home",
                 "radius": 5,
                 "fuel_types": ["12"],
-                "scan_interval": 6,
             }
         )
     )

@@ -12,6 +12,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from .test_loaders import register_real_util_module
+
 pytestmark = pytest.mark.no_fail_on_log_exception
 
 
@@ -100,31 +102,13 @@ def _load_coordinator_module():
     const_module.DOMAIN = "qld_servo_price"
     const_module.TOKEN = "subscriber_token"
     const_module.RADIUS = "radius"
-    const_module.SCAN_INTERVAL = "scan_interval"
+    const_module.DEFAULT_UPDATE_INTERVAL_HOURS = 6
     const_module.LOCATION_ENTITY = "location_entity"
     const_module.ZONE = "zone"
+    const_module.FUEL_TYPES_OPTIONS = [{"value": "12", "label": "E10"}]
     sys.modules["custom_components.qld_servo_price.const"] = const_module
 
-    util_module = ModuleType("custom_components.qld_servo_price.util")
-
-    def coords_from_state(state):
-        if not state:
-            return None, None
-        lat = state.attributes.get("latitude")
-        lon = state.attributes.get("longitude")
-        if lat is None or lon is None:
-            return None, None
-        try:
-            return float(lat), float(lon)
-        except (TypeError, ValueError):
-            return None, None
-
-    def get_entry_value(entry, key, default=None):
-        return entry.options.get(key, entry.data.get(key, default))
-
-    util_module.coords_from_state = coords_from_state
-    util_module.get_entry_value = get_entry_value
-    sys.modules["custom_components.qld_servo_price.util"] = util_module
+    register_real_util_module()
 
     package = ModuleType("custom_components.qld_servo_price")
     package.__path__ = []  # mark as package
@@ -203,7 +187,6 @@ def test_resolve_entry_coords_prefers_location_entity():
             "zone": "zone.home",
             "latitude": -28.0,
             "longitude": 154.0,
-            "scan_interval": 6,
         },
         options={},
         title="Fuel near Test",
@@ -222,7 +205,7 @@ def test_async_recompute_from_cache_updates_data():
 
     hass = _FakeHass({"zone.home": _state("Home", -27.55, 153.55)})
     entry = SimpleNamespace(
-        data={"zone": "zone.home", "scan_interval": 6},
+        data={"zone": "zone.home"},
         options={},
         title="Fuel near Home",
     )
@@ -289,7 +272,7 @@ def test_resolve_entry_coords_falls_back_to_zone_then_stored_coords():
     module = _load_coordinator_module()
     hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
     entry = SimpleNamespace(
-        data={"zone": "zone.home", "scan_interval": 6, "latitude": -28.0, "longitude": 154.0},
+        data={"zone": "zone.home", "latitude": -28.0, "longitude": 154.0},
         options={},
         title="Fuel near Home",
     )
@@ -298,7 +281,7 @@ def test_resolve_entry_coords_falls_back_to_zone_then_stored_coords():
 
     hass = _FakeHass({})
     bad_entry = SimpleNamespace(
-        data={"scan_interval": 6, "latitude": "bad", "longitude": "bad"},
+        data={"latitude": "bad", "longitude": "bad"},
         options={},
         title="Fuel near Bad",
     )
@@ -318,7 +301,7 @@ def test_setup_location_listener_paths_and_change_detection():
 
     hass = _FakeHass({"person.test": _state("Person", -27.5, 153.0)})
     entry = SimpleNamespace(
-        data={"location_entity": "person.test", "scan_interval": 6},
+        data={"location_entity": "person.test"},
         options={},
         title="Fuel",
     )
@@ -353,7 +336,7 @@ def test_setup_location_listener_zone_only_recomputes_on_zone_move():
     module.async_track_state_change_event = _track
     hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
     entry = SimpleNamespace(
-        data={"zone": "zone.home", "scan_interval": 6},
+        data={"zone": "zone.home"},
         options={},
         title="Fuel",
     )
@@ -383,7 +366,7 @@ def test_setup_location_listener_ignores_zone_change_when_location_is_primary():
         }
     )
     entry = SimpleNamespace(
-        data={"location_entity": "person.p", "zone": "zone.home", "scan_interval": 6},
+        data={"location_entity": "person.p", "zone": "zone.home"},
         options={},
         title="Fuel",
     )
@@ -407,7 +390,7 @@ def test_location_listener_uses_call_soon_threadsafe_before_task_creation():
     loop = _FakeEventLoop(execute_immediately=False)
     hass = _FakeHass({"person.test": _state("Person", -27.5, 153.0)}, loop=loop)
     entry = SimpleNamespace(
-        data={"location_entity": "person.test", "scan_interval": 6},
+        data={"location_entity": "person.test"},
         options={},
         title="Fuel",
     )
@@ -431,7 +414,7 @@ def test_async_update_data_fetch_and_cache_paths():
     hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
     entry = SimpleNamespace(
         entry_id="entry-1",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel",
     )
@@ -457,7 +440,7 @@ def test_refresh_failure_logs_once_then_recovery(caplog):
     hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
     entry = SimpleNamespace(
         entry_id="entry-1",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel near Home",
     )
@@ -502,13 +485,13 @@ def test_refresh_failure_logging_is_shared_across_coordinators(caplog):
 
     entry_one = SimpleNamespace(
         entry_id="entry-1",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel One",
     )
     entry_two = SimpleNamespace(
         entry_id="entry-2",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel Two",
     )
@@ -553,7 +536,7 @@ def test_async_update_data_error_paths_raise_update_failed():
     reauth_calls = []
     entry = SimpleNamespace(
         entry_id="entry-1",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel",
     )
@@ -578,7 +561,7 @@ def test_async_update_data_error_paths_raise_update_failed():
 def test_fetch_from_api_status_and_payload_paths():
     module = _load_coordinator_module()
     hass = _FakeHass({})
-    entry = SimpleNamespace(data={"subscriber_token": "token", "scan_interval": 6}, options={}, title="Fuel")
+    entry = SimpleNamespace(data={"subscriber_token": "token"}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
 
     with pytest.raises(sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed):
@@ -608,7 +591,7 @@ def test_fetch_from_api_status_and_payload_paths():
 def test_process_raw_data_and_filter_to_zone_branches():
     module = _load_coordinator_module()
     hass = _FakeHass({})
-    entry = SimpleNamespace(data={"scan_interval": 6, "radius": 1}, options={}, title="Fuel")
+    entry = SimpleNamespace(data={"radius": 1}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
     coordinator.resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
     raw_data = {
@@ -648,7 +631,7 @@ def test_coords_from_state_missing_and_invalid_values():
 def test_listener_without_location_and_shutdown_and_empty_cache_recompute():
     module = _load_coordinator_module()
     hass = _FakeHass({})
-    entry = SimpleNamespace(data={"scan_interval": 6}, options={}, title="Fuel")
+    entry = SimpleNamespace(data={}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
     asyncio.run(coordinator.async_setup_location_listener())
     assert coordinator._remove_location_listener is None
@@ -661,7 +644,7 @@ def test_listener_without_location_and_shutdown_and_empty_cache_recompute():
 def test_async_shutdown_invokes_registered_listener_cleanup():
     module = _load_coordinator_module()
     hass = _FakeHass({})
-    entry = SimpleNamespace(data={"scan_interval": 6}, options={}, title="Fuel")
+    entry = SimpleNamespace(data={}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
     called = []
 
@@ -680,7 +663,7 @@ def test_async_update_data_wraps_unexpected_exception():
     hass = _FakeHass({"zone.home": _state("Home", -27.5, 153.0)})
     entry = SimpleNamespace(
         entry_id="entry-1",
-        data={"scan_interval": 6, "subscriber_token": "token", "zone": "zone.home"},
+        data={"subscriber_token": "token", "zone": "zone.home"},
         options={},
         title="Fuel",
     )
@@ -697,7 +680,7 @@ def test_async_update_data_wraps_unexpected_exception():
 def test_filter_to_zone_skips_sites_outside_radius():
     module = _load_coordinator_module()
     hass = _FakeHass({})
-    entry = SimpleNamespace(data={"scan_interval": 6, "radius": 0.1}, options={}, title="Fuel")
+    entry = SimpleNamespace(data={"radius": 0.1}, options={}, title="Fuel")
     coordinator = module.QldFuelDataUpdateCoordinator(hass, entry)
     coordinator.resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
     result = coordinator._filter_to_zone(

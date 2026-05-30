@@ -4,7 +4,7 @@ Home Assistant custom integration for **Queensland (Australia) retail fuel price
 
 **Domain:** `qld_servo_price`  
 **Integration type:** service (cloud polling)  
-**Declared quality scale:** Gold (see `manifest.json` and the [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/)).
+**Declared quality scale:** Platinum (see `manifest.json` and the [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/)).
 
 Further reading: [Operations and CI](docs/integration-operations.md) · [API reference (contributors)](docs/fuel-prices-qld-api-reference.md) · [Contributing](CONTRIBUTING.md)
 
@@ -48,7 +48,6 @@ These options are set during setup and can be changed later via the integration�
 | `zone` | Yes | `zone.home` | Zone entity | Fallback reference location and naming context when `location_entity` is unset or has invalid coordinates. Still required when using a tracker. |
 | `radius` | Yes | `5` | 1–100 km | Maximum distance from the reference point to include stations. |
 | `fuel_types` | Yes | E10, Unleaded 95, Diesel (`12`, `5`, `3`) | Subset of supported IDs (see table below) | Which products get entities. |
-| `scan_interval` | Yes | `6` | 1–24 hours | Coordinator polling interval per entry. |
 | `enable_geo_entities` | No | `false` | boolean | Creates `geo_location` entities for map use; registry can grow quickly. |
 
 ### Supported fuel type IDs
@@ -158,7 +157,7 @@ YAML for **Developer tools** and automation patterns: see [Examples](#examples) 
 
 ## Data updates
 
-- **`scan_interval`** sets the per-entry polling period (hours).
+- Each config entry polls on a **fixed six-hour** schedule (not user-configurable).
 - All entries share **one** raw API payload stored under the integration domain.
 - The shared cache **TTL is five minutes**; back-to-back manual refreshes inside that window reuse the same download.
 

@@ -20,7 +20,8 @@ FUEL_TYPES_OPTIONS = [
     {"value": "19", "label": "E85"},
 ]
 
-SCAN_INTERVAL = "scan_interval"
+# Internal coordinator polling period (hours); not exposed in config flow or options.
+DEFAULT_UPDATE_INTERVAL_HOURS = 6
 
 ENABLE_GEO_ENTITIES = "enable_geo_entities"
 

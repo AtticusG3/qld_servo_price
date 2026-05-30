@@ -1,6 +1,6 @@
 # Integration Quality Scale (qld_servo_price)
 
-Declared in `manifest.json`: **gold**.
+Declared in `manifest.json`: **platinum**.
 
 Official references: [overview](https://developers.home-assistant.io/docs/core/integration-quality-scale/), [rules](https://developers.home-assistant.io/docs/core/integration-quality-scale/rules), [checklist](https://developers.home-assistant.io/docs/core/integration-quality-scale/checklist). Core integrations also maintain `quality_scale.yaml`; this custom repo uses this file plus README for exemptions.
 
@@ -11,7 +11,7 @@ This matrix reflects the custom integration repository (in-repo README/docs, loc
 | Rule | Status | Evidence |
 |------|--------|----------|
 | action-setup | pass | `refresh_prices` registered in `__init__.py` |
-| appropriate-polling | pass | Per-entry `scan_interval`; shared 5-minute API cache in `coordinator.py` |
+| appropriate-polling | pass | Internal 6-hour coordinator interval (`DEFAULT_UPDATE_INTERVAL_HOURS`); shared 5-minute API cache in `coordinator.py` |
 | brands | pass | `custom_components/qld_servo_price/brand/icon.png`, `logo.png` (HA 2026.3+) |
 | common-modules | pass | `util.py`, `sensor_common.py` shared across platforms |
 | config-flow-test-coverage | pass | `tests/components/qld_servo_price/test_config_flow.py` |
@@ -80,4 +80,4 @@ This matrix reflects the custom integration repository (in-repo README/docs, loc
 
 ## Achieved tier
 
-**Gold** (custom repo, in-repo documentation). **Platinum** typing/HTTP rules also pass locally.
+**Platinum** (custom repo, in-repo documentation).

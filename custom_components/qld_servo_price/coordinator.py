@@ -17,7 +17,14 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.location import distance
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
 
-from .const import DOMAIN, TOKEN, RADIUS, SCAN_INTERVAL, LOCATION_ENTITY, ZONE
+from .const import (
+    DEFAULT_UPDATE_INTERVAL_HOURS,
+    DOMAIN,
+    TOKEN,
+    RADIUS,
+    LOCATION_ENTITY,
+    ZONE,
+)
 from .util import coords_from_state, get_entry_value
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,13 +75,11 @@ class QldFuelDataUpdateCoordinator(DataUpdateCoordinator):  # type: ignore[misc]
         self._remove_location_listener = None
         self._last_resolved_coords: tuple[float | None, float | None] | None = None
 
-        scan_interval = get_entry_value(entry, SCAN_INTERVAL, 6)
-
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{entry.title}",
-            update_interval=timedelta(hours=float(scan_interval)),
+            update_interval=timedelta(hours=DEFAULT_UPDATE_INTERVAL_HOURS),
         )
 
     @staticmethod

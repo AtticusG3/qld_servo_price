@@ -1,6 +1,6 @@
 # Agent context (qld_servo_price)
 
-Home Assistant **custom** integration for Queensland fuel station prices (`qld_servo_price`). Declared [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/) tier: **gold** (`manifest.json`). Local checklist matrix: `docs/quality-scale.md`.
+Home Assistant **custom** integration for Queensland fuel station prices (`qld_servo_price`). Declared [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/) tier: **platinum** (`manifest.json`). Local checklist matrix: `docs/quality-scale.md`.
 
 ## Skills and rules
 
@@ -26,7 +26,7 @@ Home Assistant **custom** integration for Queensland fuel station prices (`qld_s
 - Graceful logging for expected API failures (no full tracebacks).
 - New integration work on a dedicated branch/worktree; avoid editing stacked PR branches in place unless asked.
 - Do not edit attached plan files when implementing plans; execute against the plan as specified.
-- Keep scan_interval / poll frequency internal; do not add user-configurable update interval in config flow or options.
+- Keep poll frequency internal (`DEFAULT_UPDATE_INTERVAL_HOURS` in `const.py`); do not expose update interval in config flow or options.
 - Map UI: reuse station price data; prefer a single geolocation entity over many map markers when HA allows.
 - External/GitHub prose: plain and natural; avoid em dashes that read machine-polished.
 - Keep README hobbyist/assistant notice and anti-training request unless the user asks to change it.

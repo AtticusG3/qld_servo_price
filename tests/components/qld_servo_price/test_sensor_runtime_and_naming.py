@@ -11,6 +11,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from .test_loaders import register_real_util_module
+
 pytestmark = pytest.mark.no_fail_on_log_exception
 
 
@@ -31,48 +33,6 @@ def _load_sensor_module():
     const_module.RADIUS = "radius"
     const_module.ZONE = "zone"
     sys.modules["custom_components.qld_servo_price.const"] = const_module
-
-    util_module = ModuleType("custom_components.qld_servo_price.util")
-
-    def get_entry_value(entry, key, default=None):
-        return entry.options.get(key, entry.data.get(key, default))
-
-    def iter_site_fuel_pairs(sites_data, chosen_fuels):
-        allowed = {str(fuel_id) for fuel_id in chosen_fuels}
-        for site_id, site_data in sites_data.items():
-            for price_info in site_data.get("prices", []):
-                fuel_id = str(price_info.get("FuelId"))
-                if fuel_id in allowed:
-                    yield str(site_id), fuel_id
-
-    def remove_stale_registry_entities(hass, entry, active_unique_ids, unique_id_prefix):
-        registry = sys.modules["homeassistant.helpers.entity_registry"].async_get(hass)
-        for registry_entry in sys.modules[
-            "homeassistant.helpers.entity_registry"
-        ].async_entries_for_config_entry(registry, entry.entry_id):
-            unique_id = getattr(registry_entry, "unique_id", None)
-            if not unique_id or not unique_id.startswith(unique_id_prefix):
-                continue
-            if unique_id not in active_unique_ids:
-                registry.async_remove(registry_entry.entity_id)
-
-    def fuel_label_for_id(fuel_id):
-        if str(fuel_id) == "12":
-            return "E10"
-        return str(fuel_id)
-
-    def site_price_for_fuel(site_data, fuel_id):
-        for price_info in site_data.get("prices", []):
-            if str(price_info.get("FuelId")) == str(fuel_id):
-                return price_info.get("Price")
-        return None
-
-    util_module.get_entry_value = get_entry_value
-    util_module.iter_site_fuel_pairs = iter_site_fuel_pairs
-    util_module.remove_stale_registry_entities = remove_stale_registry_entities
-    util_module.fuel_label_for_id = fuel_label_for_id
-    util_module.site_price_for_fuel = site_price_for_fuel
-    sys.modules["custom_components.qld_servo_price.util"] = util_module
 
     recorder = ModuleType("homeassistant.components.recorder")
     recorder.history = SimpleNamespace(get_significant_states=lambda *_a, **_k: {})
@@ -110,6 +70,8 @@ def _load_sensor_module():
     )
     entity_registry.async_entries_for_config_entry = lambda *_a, **_k: []
     sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
+
+    register_real_util_module()
 
     device_registry = ModuleType("homeassistant.helpers.device_registry")
     device_registry.DeviceEntryType = SimpleNamespace(SERVICE="service")

@@ -10,6 +10,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from .test_loaders import register_real_util_module
+
 pytestmark = pytest.mark.no_fail_on_log_exception
 
 
@@ -106,49 +108,10 @@ def _load_geo_location_module():
     const_mod.FUEL_TYPES_OPTIONS = [{"value": "12", "label": "E10"}]
     const_mod.GEO_LOCATION_SOURCE = "qld_servo_price"
     const_mod.LOCATION_ENTITY = "location_entity"
+    const_mod.ZONE = "zone"
     sys.modules["custom_components.qld_servo_price.const"] = const_mod
 
-    util_mod = ModuleType("custom_components.qld_servo_price.util")
-
-    def get_entry_value(entry, key, default=None):
-        return entry.options.get(key, entry.data.get(key, default))
-
-    def iter_site_fuel_pairs(sites_data, chosen_fuels):
-        allowed = {str(fid) for fid in chosen_fuels}
-        for site_id, site_data in sites_data.items():
-            for price_info in site_data.get("prices", []):
-                fuel_id = str(price_info.get("FuelId"))
-                if fuel_id in allowed:
-                    yield str(site_id), fuel_id
-
-    def remove_stale_registry_entities(hass, entry, active_unique_ids, unique_id_prefix):
-        registry = sys.modules["homeassistant.helpers.entity_registry"].async_get(hass)
-        for registry_entry in sys.modules[
-            "homeassistant.helpers.entity_registry"
-        ].async_entries_for_config_entry(registry, entry.entry_id):
-            unique_id = getattr(registry_entry, "unique_id", None)
-            if not unique_id or not unique_id.startswith(unique_id_prefix):
-                continue
-            if unique_id not in active_unique_ids:
-                registry.async_remove(registry_entry.entity_id)
-
-    def site_price_for_fuel(site_data, fuel_id):
-        for price_info in site_data.get("prices", []):
-            if str(price_info.get("FuelId")) == str(fuel_id):
-                return price_info.get("Price")
-        return None
-
-    def fuel_label_for_id(fuel_id):
-        if str(fuel_id) == "12":
-            return "E10"
-        return str(fuel_id)
-
-    util_mod.get_entry_value = get_entry_value
-    util_mod.iter_site_fuel_pairs = iter_site_fuel_pairs
-    util_mod.remove_stale_registry_entities = remove_stale_registry_entities
-    util_mod.site_price_for_fuel = site_price_for_fuel
-    util_mod.fuel_label_for_id = fuel_label_for_id
-    sys.modules["custom_components.qld_servo_price.util"] = util_mod
+    register_real_util_module()
 
     pkg = ModuleType("custom_components.qld_servo_price")
     pkg.__path__ = []
