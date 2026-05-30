@@ -201,6 +201,28 @@ def _load_config_flow_module():
     coordinator_module.async_validate_token = async_validate_token
     sys.modules["custom_components.qld_servo_price.coordinator"] = coordinator_module
 
+    helpers_er = ModuleType("homeassistant.helpers.entity_registry")
+    helpers_er.async_get = lambda _hass: SimpleNamespace(
+        async_remove=lambda *_a, **_k: None,
+    )
+    helpers_er.async_entries_for_config_entry = lambda *_a, **_k: []
+    sys.modules["homeassistant.helpers.entity_registry"] = helpers_er
+
+    util_path = (
+        Path(__file__).resolve().parents[3]
+        / "custom_components"
+        / "qld_servo_price"
+        / "util.py"
+    )
+    util_spec = importlib.util.spec_from_file_location(
+        "custom_components.qld_servo_price.util",
+        str(util_path),
+    )
+    util_module = importlib.util.module_from_spec(util_spec)
+    assert util_spec and util_spec.loader
+    sys.modules["custom_components.qld_servo_price.util"] = util_module
+    util_spec.loader.exec_module(util_module)
+
     package = ModuleType("custom_components.qld_servo_price")
     package.__path__ = []
     sys.modules["custom_components.qld_servo_price"] = package
@@ -347,16 +369,17 @@ def test_user_step_aborts_when_unique_location_already_configured():
 
 
 def test_coords_from_state_handles_missing_and_invalid_values():
-    module = _load_config_flow_module()
-    assert module.QldFuelConfigFlow._coords_from_state(None) == (None, None)
-    assert module.QldFuelConfigFlow._coords_from_state(SimpleNamespace(attributes={})) == (
+    _load_config_flow_module()
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    assert util.coords_from_state(None) == (None, None)
+    assert util.coords_from_state(SimpleNamespace(attributes={})) == (
         None,
         None,
     )
     bad_state = SimpleNamespace(attributes={"latitude": "x", "longitude": 153.0})
-    assert module.QldFuelConfigFlow._coords_from_state(bad_state) == (None, None)
+    assert util.coords_from_state(bad_state) == (None, None)
     good_state = SimpleNamespace(attributes={"latitude": "-27.5", "longitude": "153.0"})
-    assert module.QldFuelConfigFlow._coords_from_state(good_state) == (-27.5, 153.0)
+    assert util.coords_from_state(good_state) == (-27.5, 153.0)
 
 
 def test_build_location_unique_id_prefers_location_then_zone_then_coords():
@@ -374,8 +397,11 @@ def test_resolve_location_reports_location_missing_then_zone_missing():
     flow = module.QldFuelConfigFlow()
     flow.hass = SimpleNamespace(states=_States({}))
     errors = {}
-    lat, lon, name = flow._resolve_location(
-        {"location_entity": "person.missing", "zone": "zone.missing"}, errors
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    lat, lon, name = util.resolve_location_from_input(
+        flow.hass,
+        {"location_entity": "person.missing", "zone": "zone.missing"},
+        errors,
     )
     assert (lat, lon, name) == (None, None, None)
     assert errors["location_entity"] == "location_entity_not_found"
@@ -573,7 +599,9 @@ def test_resolve_location_handles_missing_location_coordinates():
         )
     )
     errors = {}
-    lat, lon, name = flow._resolve_location(
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    lat, lon, name = util.resolve_location_from_input(
+        flow.hass,
         {"location_entity": "person.test", "zone": "zone.home"},
         errors,
     )
@@ -586,7 +614,8 @@ def test_resolve_location_rejects_zone_without_coordinates():
     flow = module.QldFuelConfigFlow()
     flow.hass = SimpleNamespace(states=_States({"zone.home": _state("Home", None, None)}))
     errors = {}
-    lat, lon, name = flow._resolve_location({"zone": "zone.home"}, errors)
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    lat, lon, name = util.resolve_location_from_input(flow.hass, {"zone": "zone.home"}, errors)
     assert (lat, lon, name) == (None, None, None)
     assert errors["zone"] == "zone_not_found"
 
@@ -609,11 +638,12 @@ def test_reconfigure_form_for_master_with_existing_location_entity():
 
 def test_options_flow_coords_and_resolve_location_branches():
     module = _load_config_flow_module()
+    util = sys.modules["custom_components.qld_servo_price.util"]
     entry = SimpleNamespace(data={"zone": "zone.home"}, options={})
     flow = module.QldFuelOptionsFlowHandler(entry)
-    assert flow._coords_from_state(None) == (None, None)
-    assert flow._coords_from_state(SimpleNamespace(attributes={})) == (None, None)
-    assert flow._coords_from_state(SimpleNamespace(attributes={"latitude": "x", "longitude": 1})) == (
+    assert util.coords_from_state(None) == (None, None)
+    assert util.coords_from_state(SimpleNamespace(attributes={})) == (None, None)
+    assert util.coords_from_state(SimpleNamespace(attributes={"latitude": "x", "longitude": 1})) == (
         None,
         None,
     )
@@ -626,7 +656,13 @@ def test_options_flow_coords_and_resolve_location_branches():
         )
     )
     errors = {}
-    assert flow._resolve_location({"location_entity": "person.bad", "zone": "zone.bad"}, errors) == (
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    assert util.resolve_location_from_input(
+        flow.hass,
+        {"location_entity": "person.bad", "zone": "zone.bad"},
+        errors,
+    ) == (
+        None,
         None,
         None,
     )
@@ -646,7 +682,9 @@ def test_resolve_location_returns_location_entity_coordinates_when_valid():
         )
     )
     errors = {}
-    lat, lon, name = flow._resolve_location(
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    lat, lon, name = util.resolve_location_from_input(
+        flow.hass,
         {"location_entity": "person.good", "zone": "zone.home"},
         errors,
     )
@@ -660,15 +698,20 @@ def test_options_flow_resolve_location_success_and_location_missing():
     flow = module.QldFuelOptionsFlowHandler(entry)
     flow.hass = SimpleNamespace(states=_States({"person.good": _state("Tracker", -27.5, 153.0)}))
     errors = {}
-    assert flow._resolve_location({"location_entity": "person.good", "zone": "zone.missing"}, errors) == (
-        -27.5,
-        153.0,
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    lat, lon, name = util.resolve_location_from_input(
+        flow.hass,
+        {"location_entity": "person.good", "zone": "zone.missing"},
+        errors,
     )
+    assert (lat, lon) == (-27.5, 153.0)
     errors = {}
-    assert flow._resolve_location({"location_entity": "person.missing", "zone": "zone.missing"}, errors) == (
-        None,
-        None,
+    lat2, lon2, name2 = util.resolve_location_from_input(
+        flow.hass,
+        {"location_entity": "person.missing", "zone": "zone.missing"},
+        errors,
     )
+    assert (lat2, lon2, name2) == (None, None, None)
     assert errors["location_entity"] == "location_entity_not_found"
 
 

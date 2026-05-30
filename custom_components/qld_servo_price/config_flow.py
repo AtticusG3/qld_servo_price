@@ -17,6 +17,7 @@ from .const import (
     ZONE,
 )
 from .coordinator import async_validate_token, QldFuelAuthError, QldFuelConnectionError
+from .util import get_entry_value, resolve_location_from_input
 
 
 def _location_entity_selector_options(hass: Any) -> list[dict[str, str]]:
@@ -69,50 +70,6 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         return QldFuelOptionsFlowHandler(config_entry)
 
     @staticmethod
-    def _coords_from_state(state: Any) -> tuple[float | None, float | None]:
-        """Extract latitude/longitude from a state object."""
-        if not state:
-            return None, None
-
-        lat = state.attributes.get("latitude")
-        lon = state.attributes.get("longitude")
-        if lat is None or lon is None:
-            return None, None
-
-        try:
-            return float(lat), float(lon)
-        except (TypeError, ValueError):
-            return None, None
-
-    def _resolve_location(
-        self, user_input: dict[str, Any], errors: dict[str, str]
-    ) -> tuple[float | None, float | None, str | None]:
-        """Resolve coordinates from location entity first, then zone."""
-        location_entity_id = user_input.get(LOCATION_ENTITY)
-        if location_entity_id:
-            location_state = self.hass.states.get(location_entity_id)
-            if not location_state:
-                errors[LOCATION_ENTITY] = "location_entity_not_found"
-            else:
-                lat, lon = self._coords_from_state(location_state)
-                if lat is not None and lon is not None:
-                    return lat, lon, location_state.name
-                errors[LOCATION_ENTITY] = "location_entity_missing_coordinates"
-
-        zone_id = user_input.get(ZONE)
-        zone_state = self.hass.states.get(zone_id)
-        if not zone_state:
-            errors[ZONE] = "zone_not_found"
-            return None, None, None
-
-        lat, lon = self._coords_from_state(zone_state)
-        if lat is None or lon is None:
-            errors[ZONE] = "zone_not_found"
-            return None, None, None
-
-        return lat, lon, zone_state.name
-
-    @staticmethod
     def _build_location_unique_id(user_input: dict[str, Any], lat: float, lon: float) -> str:
         """Build a stable unique ID for this configured location."""
         location_entity_id = user_input.get(LOCATION_ENTITY)
@@ -132,7 +89,9 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            lat, lon, location_name = self._resolve_location(user_input, errors)
+            lat, lon, location_name = resolve_location_from_input(
+                self.hass, user_input, errors
+            )
             if lat is not None and lon is not None:
                 await self.async_set_unique_id(self._build_location_unique_id(user_input, lat, lon))
                 self._abort_if_unique_id_configured()
@@ -220,7 +179,9 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: igno
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            lat, lon, location_name = self._resolve_location(user_input, errors)
+            lat, lon, location_name = resolve_location_from_input(
+                self.hass, user_input, errors
+            )
             if lat is not None and lon is not None:
                 updates = dict(user_input)
                 updates["is_master"] = is_master
@@ -278,56 +239,12 @@ class QldFuelOptionsFlowHandler(config_entries.OptionsFlow):  # type: ignore[mis
         """Initialize options flow."""
         self.config_entry = config_entry
 
-    @staticmethod
-    def _coords_from_state(state: Any) -> tuple[float | None, float | None]:
-        """Extract latitude/longitude from a state object."""
-        if not state:
-            return None, None
-
-        lat = state.attributes.get("latitude")
-        lon = state.attributes.get("longitude")
-        if lat is None or lon is None:
-            return None, None
-
-        try:
-            return float(lat), float(lon)
-        except (TypeError, ValueError):
-            return None, None
-
-    def _resolve_location(
-        self, user_input: dict[str, Any], errors: dict[str, str]
-    ) -> tuple[float | None, float | None]:
-        """Resolve coordinates from location entity first, then zone."""
-        location_entity_id = user_input.get(LOCATION_ENTITY)
-        if location_entity_id:
-            location_state = self.hass.states.get(location_entity_id)
-            if not location_state:
-                errors[LOCATION_ENTITY] = "location_entity_not_found"
-            else:
-                lat, lon = self._coords_from_state(location_state)
-                if lat is not None and lon is not None:
-                    return lat, lon
-                errors[LOCATION_ENTITY] = "location_entity_missing_coordinates"
-
-        zone_id = user_input.get(ZONE)
-        zone_state = self.hass.states.get(zone_id)
-        if not zone_state:
-            errors[ZONE] = "zone_not_found"
-            return None, None
-
-        lat, lon = self._coords_from_state(zone_state)
-        if lat is None or lon is None:
-            errors[ZONE] = "zone_not_found"
-            return None, None
-
-        return lat, lon
-
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
         """Manage zone, radius, fuel type and scan interval options."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            lat, lon = self._resolve_location(user_input, errors)
+            lat, lon, _ = resolve_location_from_input(self.hass, user_input, errors)
             if lat is not None and lon is not None:
                 user_input[CONF_LATITUDE] = lat
                 user_input[CONF_LONGITUDE] = lon
