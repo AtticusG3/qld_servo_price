@@ -79,7 +79,7 @@ When you change behavior, config options, entities, or actions, update the READM
 
 ## Integration quality
 
-`manifest.json` declares `quality_scale`: **gold**, aligned with the [Home Assistant Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/). Changes should preserve existing checklist expectations (config flow, diagnostics, translated exceptions, tests, and documentation parity).
+`manifest.json` declares `quality_scale`: **gold**, aligned with the [Home Assistant Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/). Changes should preserve existing checklist expectations (config flow, diagnostics, translated exceptions, tests, and documentation parity). Rule-by-rule status for this repo: [docs/quality-scale.md](docs/quality-scale.md). For a full audit workflow, see `.cursor/skills/ha-integration-compliance/SKILL.md`.
 
 ## Licensing and attribution
 

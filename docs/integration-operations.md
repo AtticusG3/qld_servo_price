@@ -2,6 +2,8 @@
 
 Operational detail for **QLD Service Station Prices** (`qld_servo_price`). User-facing installation, entities, and behavior are summarized in the repository [README.md](../README.md).
 
+Integration icons and logos are served from `custom_components/qld_servo_price/brand/` on **Home Assistant 2026.3+**. Older Home Assistant versions may not display custom integration branding in the UI.
+
 ## Integration action
 
 The integration registers one action (service):
@@ -29,6 +31,7 @@ Automations should list steps under the `actions` key on **Home Assistant 2024.2
 |---------|----------------|
 | Invalid token during setup | Token is current, copied exactly, no leading or trailing spaces |
 | Cannot connect | Home Assistant outbound internet; retry later for upstream outages |
+| Expected repeated outage warnings but only one appears | Refresh-failure warnings are intentionally logged once per integration-wide outage; a single recovery info log is emitted when API fetches succeed again |
 | No nearby stations | Increase radius; confirm zone or tracked entity exposes latitude and longitude |
 | Stale values | Call `qld_servo_price.refresh_prices`; remember the shared 5-minute API cache (see README) |
 | Repairs / reauth | Supply a new Data Consumer Token when the API rejects the stored token |

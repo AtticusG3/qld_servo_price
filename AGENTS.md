@@ -1,18 +1,43 @@
-## Learned User Preferences
-- Prefer Windows-compatible workflows and command/script formats over Unix-only hooks.
-- Prefer Home Assistant-style entity attributes while preserving backward compatibility.
-- Do not add tool/vendor branding text in repo content, commit messages, or PR/comment text.
-- Prefer graceful logging for expected upstream failures in services (for example API errors) without emitting full tracebacks.
-- Prefer isolating new integration work in a dedicated branch (often in a separate git worktree) rather than modifying stacked PR branches in place unless explicitly requested.
-- For map or geolocation presentation, prefer reusing existing station price data and minimizing duplicate entity surfaces (for example favoring a single geolocation source over listing many per-station entities on the Map card) when Home Assistant capabilities allow.
-- When drafting user-facing external text (for example GitHub replies), prefer plain, natural phrasing; avoid stylized punctuation such as em dashes when it reads as overly polished or machine-generated.
-- When editing project documentation, preserve the README notice on hobbyist authorship, heavy use of coding assistants, and the request not to use the repository for model training, unless the user asks to remove or replace it.
+# Agent context (qld_servo_price)
 
-## Learned Workspace Facts
-- The workspace is a Home Assistant custom integration repository (domain `qld_servo_price`) for Queensland fuel station prices.
-- Contributor setup, tests, typing, and CI are described in `CONTRIBUTING.md`.
-- The user maintains and contributes changes upstream via fork-based GitHub pull requests.
-- Project lineage: derived from upstream spusuf/qld_fuel-hass (Yusuf Nayab); v.2.0.0 baseline and credits are documented in NOTICE and README. Optional location-source behavior relates to upstream issue #3 (device-tracker-style coordinates in addition to zones); broader geo or map opt-in pull requests have been declined upstream, so similar features may remain fork-only or custom-repo unless upstream changes direction.
-- Stacked pull requests may use a feature branch as the merge base when later work depends on earlier in-flight changes.
-- HACS repository validation can fail on GitHub repository settings (for example topics and issues) rather than integration code alone.
-- Use `scripts/run-tests.ps1` to run the project test suite on Windows when available.
+Home Assistant **custom** integration for Queensland fuel station prices (`qld_servo_price`). Declared [Integration Quality Scale](https://developers.home-assistant.io/docs/core/integration-quality-scale/) tier: **gold** (`manifest.json`). Local checklist matrix: `docs/quality-scale.md`.
+
+## Skills and rules
+
+| Path | Use when |
+|------|----------|
+| `.cursor/skills/ha-integration-compliance/SKILL.md` | Quality-scale audit, PR compliance, hassfest-oriented review |
+| `.cursor/rules/no-tool-branding.mdc` | Any repo content, commits, or GitHub text (no tool/vendor attribution) |
+
+## Key paths
+
+| Path | Purpose |
+|------|---------|
+| `custom_components/qld_servo_price/` | Integration code |
+| `tests/components/qld_servo_price/` | Pytest suite |
+| `scripts/run-tests.ps1` | Windows test runner (preferred locally) |
+| `CONTRIBUTING.md` | Setup, CI, typing, coverage |
+| `docs/integration-operations.md` | Actions, troubleshooting, removal |
+
+## User preferences
+
+- Windows-friendly commands (`.\scripts\run-tests.ps1`) over Unix-only assumptions.
+- Home Assistant entity attribute style; preserve backward compatibility when changing attributes.
+- Graceful logging for expected API failures (no full tracebacks).
+- New integration work on a dedicated branch/worktree; avoid editing stacked PR branches in place unless asked.
+- Do not edit attached plan files when implementing plans; execute against the plan as specified.
+- Keep scan_interval / poll frequency internal; do not add user-configurable update interval in config flow or options.
+- Map UI: reuse station price data; prefer a single geolocation entity over many map markers when HA allows.
+- External/GitHub prose: plain and natural; avoid em dashes that read machine-polished.
+- Keep README hobbyist/assistant notice and anti-training request unless the user asks to change it.
+- No tool/vendor branding in repo content, commits, or PR/issue text.
+
+## Workspace facts
+
+- Fork-based PRs to upstream; lineage from [spusuf/qld_fuel-hass](https://github.com/spusuf/qld_fuel-hass) (see NOTICE/README).
+- Optional device-tracker location source relates to upstream issue #3; broader geo/map opt-in was declined upstream—may stay fork-only.
+- Stacked PRs sometimes use a feature branch as merge base.
+- HACS validation can fail on GitHub repo settings (topics/issues), not only code.
+- Coverage gate 95%; full-package `mypy` per `CONTRIBUTING.md`.
+- IQS `brands` assets for this custom repo: `custom_components/qld_servo_price/brand/icon.png` and `logo.png`.
+- Shared helpers in `util.py`; sensor platform split across `sensor_common.py`, `sensor_station.py`, and `sensor_best_price.py`.

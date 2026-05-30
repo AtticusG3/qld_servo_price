@@ -10,7 +10,7 @@ Further reading: [Operations and CI](docs/integration-operations.md) · [API ref
 
 ## Requirements
 
-- **Home Assistant** 2024.1 or newer (minimum declared in [`hacs.json`](hacs.json)).
+- **Home Assistant** 2024.1 or newer (minimum declared in [`hacs.json`](hacs.json)). Integration branding in the UI uses local assets under `custom_components/qld_servo_price/brand/` and requires **Home Assistant 2026.3 or newer**; on older cores the integration still works but may not show custom icons in Settings.
 - A valid **Fuel Prices QLD Data Consumer Token** ([publisher and consumer sign-up](https://forms.office.com/Pages/ResponsePage.aspx?id=XbdJc0AKKUSHYhmf2mnq-9XqCWIciN5Osw2Y74gWzu9UQ0pCR1dPV0FWR1ZPN0FYSEc0UEVQMkQzMyQlQCN0PWcu)).
 - Outbound HTTPS from Home Assistant to the Fuel Prices QLD API.
 
@@ -45,7 +45,7 @@ These options are set during setup and can be changed later via the integration�
 |-----------|----------|---------|-------------|-------------|
 | `subscriber_token` | Yes, on the **first** config entry only | none | GUID from Fuel Prices QLD | Authenticates API access. Further entries reuse the master entry’s token. |
 | `location_entity` | No | none | `person`, `device_tracker`, or `sensor` entities that expose `latitude` and `longitude` | When set, coordinates come from this entity; otherwise the zone below is used. |
-| `zone` | Yes | `zone.home` | Zone entity | Fallback reference location and naming context when `location_entity` is not set. Still required when using a tracker. |
+| `zone` | Yes | `zone.home` | Zone entity | Fallback reference location and naming context when `location_entity` is unset or has invalid coordinates. Still required when using a tracker. |
 | `radius` | Yes | `5` | 1–100 km | Maximum distance from the reference point to include stations. |
 | `fuel_types` | Yes | E10, Unleaded 95, Diesel (`12`, `5`, `3`) | Subset of supported IDs (see table below) | Which products get entities. |
 | `scan_interval` | Yes | `6` | 1–24 hours | Coordinator polling interval per entry. |
@@ -152,6 +152,7 @@ The **Last API response** diagnostic uses **`device_class: timestamp`**, which m
 
 - If any entry fails during the run, Home Assistant surfaces a translated error after other entries have been processed; failed config entry IDs are included in the message. Check logs for per-entry detail.
 - If the API rejects the token, the integration starts **reauthentication** for that entry and may raise a **Repairs** issue.
+- During shared API outages, warning logs are throttled at integration scope (first warning only) and one recovery info log is emitted after a successful fetch.
 
 YAML for **Developer tools** and automation patterns: see [Examples](#examples) and [docs/integration-operations.md](docs/integration-operations.md).
 
