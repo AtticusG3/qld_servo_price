@@ -32,6 +32,48 @@ def _load_sensor_module():
     const_module.ZONE = "zone"
     sys.modules["custom_components.qld_servo_price.const"] = const_module
 
+    util_module = ModuleType("custom_components.qld_servo_price.util")
+
+    def get_entry_value(entry, key, default=None):
+        return entry.options.get(key, entry.data.get(key, default))
+
+    def iter_site_fuel_pairs(sites_data, chosen_fuels):
+        allowed = {str(fuel_id) for fuel_id in chosen_fuels}
+        for site_id, site_data in sites_data.items():
+            for price_info in site_data.get("prices", []):
+                fuel_id = str(price_info.get("FuelId"))
+                if fuel_id in allowed:
+                    yield str(site_id), fuel_id
+
+    def remove_stale_registry_entities(hass, entry, active_unique_ids, unique_id_prefix):
+        registry = sys.modules["homeassistant.helpers.entity_registry"].async_get(hass)
+        for registry_entry in sys.modules[
+            "homeassistant.helpers.entity_registry"
+        ].async_entries_for_config_entry(registry, entry.entry_id):
+            unique_id = getattr(registry_entry, "unique_id", None)
+            if not unique_id or not unique_id.startswith(unique_id_prefix):
+                continue
+            if unique_id not in active_unique_ids:
+                registry.async_remove(registry_entry.entity_id)
+
+    def fuel_label_for_id(fuel_id):
+        if str(fuel_id) == "12":
+            return "E10"
+        return str(fuel_id)
+
+    def site_price_for_fuel(site_data, fuel_id):
+        for price_info in site_data.get("prices", []):
+            if str(price_info.get("FuelId")) == str(fuel_id):
+                return price_info.get("Price")
+        return None
+
+    util_module.get_entry_value = get_entry_value
+    util_module.iter_site_fuel_pairs = iter_site_fuel_pairs
+    util_module.remove_stale_registry_entities = remove_stale_registry_entities
+    util_module.fuel_label_for_id = fuel_label_for_id
+    util_module.site_price_for_fuel = site_price_for_fuel
+    sys.modules["custom_components.qld_servo_price.util"] = util_module
+
     recorder = ModuleType("homeassistant.components.recorder")
     recorder.history = SimpleNamespace(get_significant_states=lambda *_a, **_k: {})
     recorder.get_instance = lambda _hass: SimpleNamespace(
@@ -81,6 +123,10 @@ def _load_sensor_module():
             self.coordinator = coordinator
             self.hass = coordinator.hass
 
+        @property
+        def available(self):
+            return self.coordinator.last_update_success
+
         async def async_added_to_hass(self):
             return None
 
@@ -110,16 +156,19 @@ def _load_sensor_module():
     package.__path__ = []
     sys.modules["custom_components.qld_servo_price"] = package
 
-    path = Path(__file__).resolve().parents[3] / "custom_components" / "qld_servo_price" / "sensor.py"
-    spec = importlib.util.spec_from_file_location(
-        "custom_components.qld_servo_price.sensor",
-        str(path),
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules["custom_components.qld_servo_price.sensor"] = module
-    spec.loader.exec_module(module)
-    return module
+    base = Path(__file__).resolve().parents[3] / "custom_components" / "qld_servo_price"
+    for submodule in ("sensor_common", "sensor_station", "sensor_best_price", "sensor"):
+        path = base / f"{submodule}.py"
+        spec = importlib.util.spec_from_file_location(
+            f"custom_components.qld_servo_price.{submodule}",
+            str(path),
+        )
+        sub = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        sys.modules[f"custom_components.qld_servo_price.{submodule}"] = sub
+        spec.loader.exec_module(sub)
+
+    return sys.modules["custom_components.qld_servo_price.sensor"]
 
 
 def test_sensor_module_exposes_parallel_updates_and_entity_name():
@@ -152,8 +201,13 @@ def test_best_price_sensor_marks_aggregate_scopes_as_diagnostic():
     assert global_sensor._attr_entity_category == "diagnostic"
 
 
+def _common_module():
+    return sys.modules["custom_components.qld_servo_price.sensor_common"]
+
+
 def test_find_all_tracked_best_uses_entry_runtime_data():
-    module = _load_sensor_module()
+    _load_sensor_module()
+    common = _common_module()
 
     entry_1 = SimpleNamespace(
         runtime_data=SimpleNamespace(data={"local_cheapest": {"12": {"price": 199.9}}})
@@ -165,7 +219,7 @@ def test_find_all_tracked_best_uses_entry_runtime_data():
         config_entries=SimpleNamespace(async_entries=lambda _domain: [entry_1, entry_2])
     )
 
-    best_price, station = module._find_all_tracked_best(hass, "12")
+    best_price, station = common.find_all_tracked_best(hass, "12")
     assert best_price == 189.5
     assert station["price"] == 189.5
 
@@ -195,42 +249,53 @@ def _build_coordinator(module):
 
 
 def test_get_fuel_data_and_location_source():
-    module = _load_sensor_module()
-    assert module.get_fuel_data(None, "12") is None
-    assert module.get_fuel_data({"12": {"price": 1}}, "12") == {"price": 1}
+    _load_sensor_module()
+    common = _common_module()
+    assert common.get_fuel_data(None, "12") is None
+    assert common.get_fuel_data({"12": {"price": 1}}, "12") == {"price": 1}
     entry = SimpleNamespace(data={"location_entity": "person.me"}, options={})
-    assert module._resolve_location_source(entry) == "person.me"
+    assert common.resolve_location_source(entry) == "person.me"
     entry = SimpleNamespace(data={}, options={"location_entity": 42})
-    assert module._resolve_location_source(entry) is None
+    assert common.resolve_location_source(entry) is None
 
 
 def test_remove_stale_entities_removes_only_matching_prefix():
-    module = _load_sensor_module()
+    _load_sensor_module()
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    er = sys.modules["homeassistant.helpers.entity_registry"]
     removed = []
     registry = SimpleNamespace(async_remove=lambda entity_id: removed.append(entity_id))
-    module.er.async_get = lambda _hass: registry
-    module.er.async_entries_for_config_entry = lambda _registry, _entry_id: [
+    er.async_get = lambda _hass: registry
+    er.async_entries_for_config_entry = lambda _registry, _entry_id: [
         SimpleNamespace(unique_id="qld_servo_price_entry_1_12_1", entity_id="sensor.keep"),
         SimpleNamespace(unique_id="qld_servo_price_entry_1_12_2", entity_id="sensor.remove"),
         SimpleNamespace(unique_id="other_prefix", entity_id="sensor.other"),
     ]
-    module._remove_stale_entities(
+    util.remove_stale_registry_entities(
         SimpleNamespace(),
         SimpleNamespace(entry_id="entry_1"),
         {"qld_servo_price_entry_1_12_1"},
+        unique_id_prefix="qld_servo_price_entry_1_",
     )
     assert removed == ["sensor.remove"]
 
 
 def test_remove_stale_entities_skips_entries_without_unique_id():
-    module = _load_sensor_module()
+    _load_sensor_module()
+    util = sys.modules["custom_components.qld_servo_price.util"]
+    er = sys.modules["homeassistant.helpers.entity_registry"]
     removed = []
     registry = SimpleNamespace(async_remove=lambda entity_id: removed.append(entity_id))
-    module.er.async_get = lambda _hass: registry
-    module.er.async_entries_for_config_entry = lambda *_a, **_k: [
+    er.async_get = lambda _hass: registry
+    er.async_entries_for_config_entry = lambda *_a, **_k: [
         SimpleNamespace(unique_id=None, entity_id="sensor.none"),
     ]
-    module._remove_stale_entities(SimpleNamespace(), SimpleNamespace(entry_id="entry_1"), set())
+    util.remove_stale_registry_entities(
+        SimpleNamespace(),
+        SimpleNamespace(entry_id="entry_1"),
+        set(),
+        unique_id_prefix="qld_servo_price_entry_1_",
+    )
     assert removed == []
 
 
@@ -272,13 +337,30 @@ def test_best_price_sensor_native_values_and_attributes():
     module = _load_sensor_module()
     coordinator = _build_coordinator(module)
     coordinator.data = {
-        "global_cheapest": {"12": {"price": 199.9, "site_id": "1"}},
+        "global_cheapest": {
+            "12": {
+                "price": 199.9,
+                "site_id": "1",
+                "name": "Station 1",
+                "address": "Main",
+                "postcode": "4000",
+                "latitude": -27.5,
+                "longitude": 153.0,
+            }
+        },
         "local_cheapest": {"12": {"price": 189.9, "site_id": "1"}},
+        "sites": {
+            "1": {
+                "name": "Station 1",
+                "address": "Main",
+                "postcode": "4000",
+                "latitude": -27.5,
+                "longitude": 153.0,
+                "distance": 1.2,
+            }
+        },
     }
-    coordinator.hass.data["qld_servo_price"]["raw_data"]["sites"] = [
-        {"S": "1", "N": "Station 1", "A": "Main", "P": "4000", "Lat": -27.5, "Lng": 153.0}
-    ]
-    coordinator._resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
+    coordinator.resolve_entry_coords = lambda: (-27.5, 153.0, "zone.home")
     global_sensor = module.QldFuelBestPriceSensor(coordinator, "12", "global")
     assert global_sensor.native_value == 199.9
     attrs = global_sensor.extra_state_attributes
@@ -305,7 +387,36 @@ def test_best_price_sensor_all_tracked_native_value_and_attributes():
     sensor = module.QldFuelBestPriceSensor(coordinator, "12", "all_tracked")
     assert sensor.native_value == 160.0
     attrs = sensor.extra_state_attributes
-    assert attrs["status"].startswith("Site")
+    assert attrs["station_name"] == "Unknown"
+
+
+def test_all_tracked_best_price_reuses_single_snapshot_per_update():
+    module = _load_sensor_module()
+    best_price = sys.modules["custom_components.qld_servo_price.sensor_best_price"]
+    coordinator = _build_coordinator(module)
+    entry_1 = SimpleNamespace(
+        runtime_data=SimpleNamespace(
+            data={"local_cheapest": {"12": {"price": 160.0, "site_id": "2", "name": "Station 2"}}}
+        )
+    )
+    coordinator.hass.config_entries = SimpleNamespace(async_entries=lambda _domain: [entry_1])
+    calls = {"count": 0}
+    original = best_price.find_all_tracked_best
+
+    def _counting_find_all_tracked_best(hass, fuel_id):
+        calls["count"] += 1
+        return original(hass, fuel_id)
+
+    best_price.find_all_tracked_best = _counting_find_all_tracked_best
+    try:
+        sensor = module.QldFuelBestPriceSensor(coordinator, "12", "all_tracked")
+        sensor._cached_all_tracked = None
+        scope = sensor._scope_config
+        assert scope.get_native_value(sensor) == 160.0
+        assert scope.get_station_data(sensor)["name"] == "Station 2"
+        assert calls["count"] == 1
+    finally:
+        best_price.find_all_tracked_best = original
 
 
 def test_best_price_sensor_handles_missing_station_data_paths():
@@ -326,10 +437,15 @@ def test_best_price_sensor_handles_missing_station_data_paths():
     assert sensor2._find_station_entity_id({}) is None
 
 
+def _station_module():
+    return sys.modules["custom_components.qld_servo_price.sensor_station"]
+
+
 def test_fuel_price_sensor_values_attributes_and_history():
     module = _load_sensor_module()
+    station = _station_module()
     now = datetime(2026, 4, 1, 0, 0, 0)
-    module.dt_util.utcnow = lambda: now
+    station.dt_util.utcnow = lambda: now
     coordinator = _build_coordinator(module)
     coordinator.data = {
         "sites": {
@@ -361,7 +477,7 @@ def test_fuel_price_sensor_values_attributes_and_history():
     async def _executor(*_a, **_k):
         return {"sensor.station_1": points}
 
-    module.get_instance = lambda _hass: SimpleNamespace(async_add_executor_job=_executor)
+    station.get_instance = lambda _hass: SimpleNamespace(async_add_executor_job=_executor)
     asyncio.run(sensor._update_history())
     assert sensor._14d_low == 189.9
     assert sensor._7d_low == 189.9
@@ -379,9 +495,34 @@ def test_fuel_price_sensor_native_value_missing_fuel_returns_none():
     assert sensor.native_value is None
 
 
+def test_coordinator_entities_unavailable_when_update_fails():
+    module = _load_sensor_module()
+    coordinator = _build_coordinator(module)
+    coordinator.data = {
+        "sites": {
+            "1": {
+                "name": "Station 1",
+                "prices": [{"FuelId": "12", "Price": 199.9}],
+            }
+        },
+        "local_cheapest": {"12": {"price": 189.9, "site_id": "1"}},
+    }
+    coordinator.last_update_success = False
+
+    station_sensor = module.FuelPriceSensor(coordinator, "1", "12")
+    best_sensor = module.QldFuelBestPriceSensor(coordinator, "12", "nearby")
+    assert station_sensor.available is False
+    assert best_sensor.available is False
+
+    coordinator.last_update_success = True
+    assert station_sensor.available is True
+    assert best_sensor.available is True
+
+
 def test_fuel_price_sensor_history_error_and_stop_paths():
     module = _load_sensor_module()
-    module.dt_util.utcnow = lambda: datetime(2026, 4, 1, 0, 0, 0)
+    station = _station_module()
+    station.dt_util.utcnow = lambda: datetime(2026, 4, 1, 0, 0, 0)
     coordinator = _build_coordinator(module)
     sensor = module.FuelPriceSensor(coordinator, "1", "12")
     sensor.entity_id = "sensor.station_1"
@@ -393,13 +534,14 @@ def test_fuel_price_sensor_history_error_and_stop_paths():
         async def async_add_executor_job(self, *_a, **_k):
             raise ValueError("no history")
 
-    module.get_instance = lambda _hass: _ErrInstance()
+    station.get_instance = lambda _hass: _ErrInstance()
     asyncio.run(sensor._update_history())
 
 
 def test_fuel_price_sensor_added_and_coordinator_update_hooks():
     module = _load_sensor_module()
-    module.dt_util.utcnow = lambda: datetime(2026, 4, 1, 0, 0, 0)
+    station = _station_module()
+    station.dt_util.utcnow = lambda: datetime(2026, 4, 1, 0, 0, 0)
     coordinator = _build_coordinator(module)
     scheduled = []
     coordinator.hass.async_create_task = lambda coro: scheduled.append(coro)
@@ -418,8 +560,9 @@ def test_fuel_price_sensor_added_and_coordinator_update_hooks():
 
 def test_history_ignores_unavailable_points():
     module = _load_sensor_module()
+    station = _station_module()
     now = datetime(2026, 4, 1, 0, 0, 0)
-    module.dt_util.utcnow = lambda: now
+    station.dt_util.utcnow = lambda: now
     coordinator = _build_coordinator(module)
     sensor = module.FuelPriceSensor(coordinator, "1", "12")
     sensor.entity_id = "sensor.station_1"
@@ -432,7 +575,7 @@ def test_history_ignores_unavailable_points():
     async def _executor(*_a, **_k):
         return {"sensor.station_1": points}
 
-    module.get_instance = lambda _hass: SimpleNamespace(async_add_executor_job=_executor)
+    station.get_instance = lambda _hass: SimpleNamespace(async_add_executor_job=_executor)
     asyncio.run(sensor._update_history())
     assert sensor._14d_low == 190.0
 

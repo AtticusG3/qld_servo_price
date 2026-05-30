@@ -5,9 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.geo_location import GeolocationEvent
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 try:
@@ -24,10 +23,16 @@ from .const import (
     DOMAIN,
     ENABLE_GEO_ENTITIES,
     FUEL_TYPES,
-    FUEL_TYPES_OPTIONS,
     GEO_LOCATION_SOURCE,
 )
-from .sensor import get_fuel_data
+from .sensor_common import device_info_for_entry, get_fuel_data
+from .util import (
+    fuel_label_for_id,
+    get_entry_value,
+    iter_site_fuel_pairs,
+    remove_stale_registry_entities,
+    site_price_for_fuel,
+)
 
 PARALLEL_UPDATES = 1
 
@@ -47,25 +52,19 @@ FUEL_ID_TO_ICON: dict[str, str] = {
 
 def geo_entities_enabled(entry: ConfigEntry) -> bool:
     """Return True when map geo entities are enabled for this config entry."""
-    return bool(
-        entry.options.get(ENABLE_GEO_ENTITIES, entry.data.get(ENABLE_GEO_ENTITIES, False))
-    )
+    return bool(get_entry_value(entry, ENABLE_GEO_ENTITIES, False))
 
 
 def _remove_stale_geo_entities(
     hass: HomeAssistant, entry: ConfigEntry, active_unique_ids: set[str]
 ) -> None:
     """Remove geo_location registry entries for this config entry that are no longer active."""
-    entity_registry = er.async_get(hass)
-    prefix = f"{DOMAIN}_geo_{entry.entry_id}_"
-    for registry_entry in er.async_entries_for_config_entry(
-        entity_registry, entry.entry_id
-    ):
-        unique_id = getattr(registry_entry, "unique_id", None)
-        if not unique_id or not unique_id.startswith(prefix):
-            continue
-        if unique_id not in active_unique_ids:
-            entity_registry.async_remove(registry_entry.entity_id)
+    remove_stale_registry_entities(
+        hass,
+        entry,
+        active_unique_ids,
+        unique_id_prefix=f"{DOMAIN}_geo_{entry.entry_id}_",
+    )
 
 
 async def async_setup_entry(
@@ -78,22 +77,16 @@ async def async_setup_entry(
         _remove_stale_geo_entities(hass, entry, set())
         return
 
-    chosen_fuels = entry.options.get(FUEL_TYPES, entry.data.get(FUEL_TYPES, []))
+    chosen_fuels = get_entry_value(entry, FUEL_TYPES, [])
     sites_data = coordinator.data.get("sites", {})
 
     entities: list[QldFuelStationGeoEvent] = []
     active_unique_ids: set[str] = set()
 
-    for site_id, site_data in sites_data.items():
-        if not site_data.get("prices"):
-            continue
-        for price_info in site_data["prices"]:
-            f_id = str(price_info.get("FuelId"))
-            if f_id not in chosen_fuels:
-                continue
-            entity = QldFuelStationGeoEvent(coordinator, site_id, f_id)
-            entities.append(entity)
-            active_unique_ids.add(entity.unique_id)
+    for site_id, fuel_id in iter_site_fuel_pairs(sites_data, chosen_fuels):
+        entity = QldFuelStationGeoEvent(coordinator, site_id, fuel_id)
+        entities.append(entity)
+        active_unique_ids.add(entity.unique_id)
 
     _remove_stale_geo_entities(hass, entry, active_unique_ids)
     async_add_entities(entities)
@@ -116,16 +109,8 @@ class QldFuelStationGeoEvent(CoordinatorEntity, GeolocationEvent):  # type: igno
 
     def _sync_map_pin_placeholders(self) -> None:
         site = self.coordinator.data.get("sites", {}).get(self.site_id, {})
-        fuel_info = next(
-            (f for f in FUEL_TYPES_OPTIONS if f["value"] == self.fuel_id),
-            {"label": self.fuel_id},
-        )
         site_name = site.get("name") or "Unknown"
-        price = None
-        for p in site.get("prices", []):
-            if str(p.get("FuelId")) == self.fuel_id:
-                price = p.get("Price")
-                break
+        price = site_price_for_fuel(site, self.fuel_id)
         price_text = "?"
         if price is not None:
             try:
@@ -133,7 +118,7 @@ class QldFuelStationGeoEvent(CoordinatorEntity, GeolocationEvent):  # type: igno
             except (TypeError, ValueError):
                 price_text = "?"
         self._attr_translation_placeholders = {
-            "fuel_type": str(fuel_info["label"]),
+            "fuel_type": fuel_label_for_id(self.fuel_id),
             "price": price_text,
             "station": site_name,
         }
@@ -144,13 +129,7 @@ class QldFuelStationGeoEvent(CoordinatorEntity, GeolocationEvent):  # type: igno
 
     @property
     def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"zone_{self.coordinator.entry.entry_id}")},
-            name=self.coordinator.entry.title,
-            manufacturer="Queensland fuel price API",
-            model="Local Zone Monitor",
-            entry_type=DeviceEntryType.SERVICE,
-        )
+        return device_info_for_entry(self.coordinator.entry)
 
     @property
     def latitude(self) -> float | None:
@@ -189,15 +168,7 @@ class QldFuelStationGeoEvent(CoordinatorEntity, GeolocationEvent):  # type: igno
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         site = self.coordinator.data.get("sites", {}).get(self.site_id, {})
-        fuel_info = next(
-            (f for f in FUEL_TYPES_OPTIONS if f["value"] == self.fuel_id),
-            {"label": self.fuel_id},
-        )
-        price = None
-        for p in site.get("prices", []):
-            if str(p.get("FuelId")) == self.fuel_id:
-                price = p.get("Price")
-                break
+        price = site_price_for_fuel(site, self.fuel_id)
 
         cheapest = get_fuel_data(
             self.coordinator.data.get("local_cheapest"), self.fuel_id
@@ -206,7 +177,7 @@ class QldFuelStationGeoEvent(CoordinatorEntity, GeolocationEvent):  # type: igno
 
         attrs: dict[str, Any] = {
             "fuel_id": self.fuel_id,
-            "fuel_label": fuel_info["label"],
+            "fuel_label": fuel_label_for_id(self.fuel_id),
             "station_name": site.get("name"),
             "address": f"{site.get('address', '')} {site.get('postcode', '')}".strip(),
         }
