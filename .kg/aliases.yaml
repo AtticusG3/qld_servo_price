@@ -1,0 +1,13 @@
+# Alternate strings -> canonical node IDs
+QLD Service Station Prices: integration:qld-servo-price
+README: doc:readme
+fuel prices qld api reference: doc:docs-fuel-prices-qld-api-reference-md
+hacs.json: config:hacs-json
+integration operations: doc:docs-integration-operations-md
+manifest.json: config:custom-components-qld-servo-price-manifest-json
+qld_servo_price: repo:qld-servo-price
+quality scale: doc:docs-quality-scale-md
+sensor: module:custom-components-qld-servo-price-sensor-py
+sensor_best_price: module:custom-components-qld-servo-price-sensor-best-price-py
+sensor_common: module:custom-components-qld-servo-price-sensor-common-py
+sensor_station: module:custom-components-qld-servo-price-sensor-station-py
